@@ -1,0 +1,50 @@
+{
+  "name": "IS31FL373x Driver",
+  "version": "1.0.0",
+  "description": "Unified Arduino driver for Lumissil IS31FL3733 (12x16) and IS31FL3737B (12x12) LED matrix controllers with multi-chip canvas support, custom layouts, and Adafruit_GFX integration.",
+  "keywords": [
+    "is31fl3733",
+    "is31fl3737b",
+    "led matrix",
+    "led driver",
+    "adafruit gfx",
+    "graphics",
+    "display",
+    "teensy",
+    "arduino",
+    "esp32",
+    "multi-chip"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/PixelTheater/IS31FL373x-Driver.git"
+  },
+  "authors": [
+    {
+      "name": "Jeremy Seitz",
+      "email": "jeremy@somebox.com",
+      "url": "https://github.com/somebox",
+      "maintainer": true
+    }
+  ],
+  "license": "MIT",
+  "homepage": "https://github.com/PixelTheater/IS31FL373x-Driver",
+  "dependencies": {
+    "adafruit/Adafruit BusIO": "^1.17.0",
+    "adafruit/Adafruit GFX Library": "^1.11.0"
+  },
+  "frameworks": ["arduino"],
+  "platforms": ["atmelavr", "atmelsam", "espressif32", "teensy", "ststm32"],
+  "build": {
+    "includeDir": "src"
+  },
+  "export": {
+    "include": [
+      "src/*",
+      "examples/*",
+      "*.md",
+      "*.txt",
+      "library.properties"
+    ]
+  }
+}
