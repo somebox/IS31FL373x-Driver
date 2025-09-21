@@ -19,7 +19,7 @@ void delay(unsigned long ms) {
 IS31FL373x_Device::IS31FL373x_Device(uint8_t addr, TwoWire *wire) 
     : Adafruit_GFX(0, 0), _i2c_dev(nullptr), _pwmBuffer(nullptr),
       _globalCurrent(128), _masterBrightness(255), _customLayout(nullptr),
-      _layoutSize(0), _useCustomLayout(false) {
+      _layoutSize(0), _useCustomLayout(false), _csOffset(0), _swOffset(0) {
     _i2c_dev = new Adafruit_I2CDevice(addr, wire);
 }
 
@@ -142,6 +142,11 @@ void IS31FL373x_Device::setLayout(const PixelMapEntry* layout, uint16_t layoutSi
     _useCustomLayout = (layout != nullptr && layoutSize > 0);
 }
 
+void IS31FL373x_Device::setCoordinateOffset(uint8_t csOffset, uint8_t swOffset) {
+    _csOffset = csOffset;
+    _swOffset = swOffset;
+}
+
 bool IS31FL373x_Device::selectPage(uint8_t page) {
     uint8_t buffer[2];
     
@@ -167,13 +172,23 @@ bool IS31FL373x_Device::readRegister(uint8_t reg, uint8_t* value) {
 }
 
 uint16_t IS31FL373x_Device::coordToIndex(uint8_t x, uint8_t y) const {
-    // Default mapping: row-major order
-    return static_cast<uint16_t>(y * getWidth() + x);
+    // Apply coordinate offsets for hardware compatibility
+    uint8_t cs = x + _csOffset + 1;  // Convert to 1-based CS (CSx)
+    uint8_t sw = y + _swOffset + 1;  // Convert to 1-based SW (SWy)
+    
+    // Use hardware register mapping formula: Address = (SWy - 1) * 16 + (CSx - 1)
+    // This matches the IS31FL373x register layout exactly
+    return static_cast<uint16_t>((sw - 1) * 16 + (cs - 1));
 }
 
 void IS31FL373x_Device::indexToCoord(uint16_t index, uint8_t* x, uint8_t* y) const {
-    if (x != nullptr) *x = index % getWidth();
-    if (y != nullptr) *y = index / getWidth();
+    // Reverse the hardware register mapping: Address = (SWy - 1) * 16 + (CSx - 1)
+    uint8_t cs = (index % 16) + 1;  // Extract CS (1-based)
+    uint8_t sw = (index / 16) + 1;  // Extract SW (1-based)
+    
+    // Convert back to 0-based coordinates and apply offsets
+    if (x != nullptr) *x = cs - 1 - _csOffset;
+    if (y != nullptr) *y = sw - 1 - _swOffset;
 }
 
 // IS31FL3733 Implementation

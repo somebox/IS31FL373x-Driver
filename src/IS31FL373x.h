@@ -103,6 +103,9 @@ public:
     // Indexed pixel control for custom layouts
     void setPixel(uint16_t index, uint8_t pwm);
     void setLayout(const PixelMapEntry* layout, uint16_t layoutSize);
+    
+    // Hardware compatibility for IS31FL3737
+    void setCoordinateOffset(uint8_t csOffset, uint8_t swOffset);
 
 protected:
     Adafruit_I2CDevice* _i2c_dev;
@@ -114,6 +117,10 @@ protected:
     PixelMapEntry* _customLayout;
     uint16_t _layoutSize;
     bool _useCustomLayout;
+    
+    // Coordinate offset for hardware compatibility (IS31FL3737 support)
+    uint8_t _csOffset;
+    uint8_t _swOffset;
     
     // Low-level I2C operations
     bool selectPage(uint8_t page);

@@ -132,31 +132,57 @@ TEST_CASE("Basic Drawing Operations") {
 TEST_CASE("Coordinate Conversion") {
     IS31FL3737B matrix;
     
-    SUBCASE("Coordinate to index conversion") {
+    SUBCASE("Hardware register mapping (no offset)") {
+        // Test hardware register formula: Address = (SWy - 1) * 16 + (CSx - 1)
+        // For (x=0, y=0): CS1, SW1 -> Address = (1-1)*16 + (1-1) = 0
         CHECK(matrix.coordToIndex(0, 0) == 0);
+        
+        // For (x=4, y=2): CS5, SW3 -> Address = (3-1)*16 + (5-1) = 2*16 + 4 = 36
+        CHECK(matrix.coordToIndex(4, 2) == 36);
+        
+        // For (x=11, y=0): CS12, SW1 -> Address = (1-1)*16 + (12-1) = 11
         CHECK(matrix.coordToIndex(11, 0) == 11);
-        CHECK(matrix.coordToIndex(0, 1) == 12);
-        CHECK(matrix.coordToIndex(11, 11) == 143);
+        
+        // For (x=0, y=1): CS1, SW2 -> Address = (2-1)*16 + (1-1) = 16
+        CHECK(matrix.coordToIndex(0, 1) == 16);
     }
     
     SUBCASE("Index to coordinate conversion") {
         uint8_t x, y;
         
+        // Address 0: CS1, SW1 -> (x=0, y=0)
         matrix.indexToCoord(0, &x, &y);
         CHECK(x == 0);
         CHECK(y == 0);
         
+        // Address 36: CS5, SW3 -> (x=4, y=2)
+        matrix.indexToCoord(36, &x, &y);
+        CHECK(x == 4);
+        CHECK(y == 2);
+        
+        // Address 11: CS12, SW1 -> (x=11, y=0)
         matrix.indexToCoord(11, &x, &y);
         CHECK(x == 11);
         CHECK(y == 0);
         
-        matrix.indexToCoord(12, &x, &y);
+        // Address 16: CS1, SW2 -> (x=0, y=1)
+        matrix.indexToCoord(16, &x, &y);
         CHECK(x == 0);
         CHECK(y == 1);
+    }
+    
+    SUBCASE("Coordinate offset for IS31FL3737 compatibility") {
+        matrix.setCoordinateOffset(2, 0);  // CS offset = 2, SW offset = 0
         
-        matrix.indexToCoord(143, &x, &y);
-        CHECK(x == 11);
-        CHECK(y == 11);
+        // User coordinates (0, 6) should map to hardware CS3, SW7
+        // Address = (7-1)*16 + (3-1) = 6*16 + 2 = 98
+        CHECK(matrix.coordToIndex(0, 6) == 98);
+        
+        // Reverse mapping: Address 98 should give user coordinates (0, 6)
+        uint8_t x, y;
+        matrix.indexToCoord(98, &x, &y);
+        CHECK(x == 0);
+        CHECK(y == 6);
     }
 }
 
