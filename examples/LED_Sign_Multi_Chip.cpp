@@ -22,10 +22,10 @@
 
 #include "IS31FL373x.h"
 
-// Three IS31FL3737B chips using 3733 driver for hardware compatibility  
-IS31FL3733 board1(ADDR::GND, ADDR::GND);  // Address: 0x50
-IS31FL3733 board2(ADDR::VCC, ADDR::VCC);  // Address: 0x5F  
-IS31FL3733 board3(ADDR::SDA, ADDR::SCL);  // Address: 0x5B
+// Three IS31FL3737 hardware chips with proper driver classes
+IS31FL3737 board1(ADDR::GND);  // Address: 0x50
+IS31FL3737 board2(ADDR::VCC);  // Address: 0x51  
+IS31FL3737 board3(ADDR::SDA);  // Address: 0x52
 
 // Create device array and canvas
 IS31FL373x_Device* devices[] = {&board1, &board2, &board3};
@@ -52,11 +52,8 @@ void setup() {
     
     Serial.println("LED sign initialized successfully!");
     
-    // Configure for IS31FL3737 hardware compatibility
-    Serial.println("Configuring hardware compatibility...");
-    board1.setCoordinateOffset(2, 0);  // CS adjustment for IS31FL3737
-    board2.setCoordinateOffset(2, 0);
-    board3.setCoordinateOffset(2, 0);
+    // No coordinate offset needed - using proper IS31FL3737 driver class
+    Serial.println("Using native IS31FL3737 driver - no coordinate offset required");
     
     // Set up brightness control
     sign.setGlobalCurrent(100);        // Hardware current limit (0-255)

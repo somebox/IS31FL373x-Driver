@@ -22,7 +22,7 @@
 
 #include "IS31FL373x.h"
 
-// All 16 possible ADDR pin combinations for maximum addressing
+// All 16 possible ADDR pin combinations for IS31FL3733 chips (12x16 matrix)
 IS31FL3733 drivers[16] = {
     IS31FL3733(ADDR::GND, ADDR::GND), IS31FL3733(ADDR::GND, ADDR::VCC),  // 0x50, 0x54
     IS31FL3733(ADDR::GND, ADDR::SDA), IS31FL3733(ADDR::GND, ADDR::SCL),  // 0x52, 0x53

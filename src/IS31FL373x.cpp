@@ -9,6 +9,31 @@ TwoWire Wire;
 void delay(unsigned long ms) {
     // No-op in unit tests
 }
+
+// Mock I2C tracking implementation
+std::vector<MockI2COperation> mockI2COperations;
+
+void clearMockI2COperations() {
+    mockI2COperations.clear();
+}
+
+size_t getMockI2COperationCount() {
+    return mockI2COperations.size();
+}
+
+bool Adafruit_I2CDevice::write(uint8_t* buffer, size_t len) {
+    if (buffer == nullptr || len < 2) return true;
+    
+    // Track I2C write operations (register writes)
+    MockI2COperation op;
+    op.addr = _addr;
+    op.reg = buffer[0];
+    op.value = buffer[1];
+    op.isWrite = true;
+    mockI2COperations.push_back(op);
+    
+    return true;
+}
 #else
 #include <Arduino.h>  // for delay() function
 #endif
@@ -183,6 +208,8 @@ void IS31FL373x_Device::setCoordinateOffset(uint8_t csOffset, uint8_t swOffset) 
 }
 
 bool IS31FL373x_Device::selectPage(uint8_t page) {
+    if (_i2c_dev == nullptr) return false;  // Not initialized yet
+    
     uint8_t buffer[2];
     
     // Unlock command register
@@ -197,12 +224,13 @@ bool IS31FL373x_Device::selectPage(uint8_t page) {
 }
 
 bool IS31FL373x_Device::writeRegister(uint8_t reg, uint8_t value) {
+    if (_i2c_dev == nullptr) return false;  // Not initialized yet
     uint8_t buffer[2] = {reg, value};
     return _i2c_dev->write(buffer, 2);
 }
 
 bool IS31FL373x_Device::readRegister(uint8_t reg, uint8_t* value) {
-    if (value == nullptr) return false;
+    if (value == nullptr || _i2c_dev == nullptr) return false;
     
     // Write register address
     if (!_i2c_dev->write(&reg, 1)) return false;
@@ -232,32 +260,89 @@ void IS31FL373x_Device::indexToCoord(uint16_t index, uint8_t* x, uint8_t* y) con
     if (y != nullptr) *y = sw - 1 - _swOffset;
 }
 
+uint8_t IS31FL373x_Device::getPixelValue(uint16_t x, uint16_t y) const {
+    if (x >= getWidth() || y >= getHeight() || _pwmBuffer == nullptr) {
+        return 0;
+    }
+    
+    uint16_t bufferIndex = y * getWidth() + x;
+    if (bufferIndex < getPWMBufferSize()) {
+        return _pwmBuffer[bufferIndex];
+    }
+    return 0;
+}
+
+uint8_t IS31FL373x_Device::getPixelValueByIndex(uint16_t index) const {
+    if (index >= getPWMBufferSize() || _pwmBuffer == nullptr) {
+        return 0;
+    }
+    return _pwmBuffer[index];
+}
+
+uint16_t IS31FL373x_Device::getNonZeroPixelCount() const {
+    if (_pwmBuffer == nullptr) return 0;
+    
+    uint16_t count = 0;
+    uint16_t bufferSize = getPWMBufferSize();
+    for (uint16_t i = 0; i < bufferSize; i++) {
+        if (_pwmBuffer[i] > 0) {
+            count++;
+        }
+    }
+    return count;
+}
+
+uint16_t IS31FL373x_Device::getPixelSum() const {
+    if (_pwmBuffer == nullptr) return 0;
+    
+    uint32_t sum = 0;  // Use 32-bit to avoid overflow
+    uint16_t bufferSize = getPWMBufferSize();
+    for (uint16_t i = 0; i < bufferSize; i++) {
+        sum += _pwmBuffer[i];
+    }
+    return (sum > 65535) ? 65535 : static_cast<uint16_t>(sum);  // Clamp to 16-bit
+}
+
 // IS31FL3733 Implementation
-IS31FL3733::IS31FL3733(uint8_t addr1, uint8_t addr2, TwoWire *wire) 
+IS31FL3733::IS31FL3733(ADDR addr1, ADDR addr2, TwoWire *wire) 
     : IS31FL373x_Device(calculateAddress(addr1, addr2), wire) {
     // Update GFX dimensions
     _width = MATRIX_WIDTH;
     _height = MATRIX_HEIGHT;
 }
 
-uint8_t IS31FL3733::calculateAddress(uint8_t addr1, uint8_t addr2) {
+uint8_t IS31FL3733::calculateAddress(ADDR addr1, ADDR addr2) {
     // Base address: 0b1010000 (0x50)
     // Address bits from ADDR pins
-    return 0x50 | ((addr2 & 0x03) << 2) | (addr1 & 0x03);
+    return 0x50 | ((static_cast<uint8_t>(addr2) & 0x03) << 2) | (static_cast<uint8_t>(addr1) & 0x03);
 }
 
-// IS31FL3737B Implementation  
-IS31FL3737B::IS31FL3737B(uint8_t addr, TwoWire *wire) 
+// IS31FL3737 Implementation
+IS31FL3737::IS31FL3737(ADDR addr, TwoWire *wire) 
     : IS31FL373x_Device(calculateAddress(addr), wire) {
     // Update GFX dimensions
     _width = MATRIX_WIDTH;
     _height = MATRIX_HEIGHT;
 }
 
-uint8_t IS31FL3737B::calculateAddress(uint8_t addr) {
+uint8_t IS31FL3737::calculateAddress(ADDR addr) {
     // Base address: 0b1010000 (0x50)
-    // Address bits from ADDR pin
-    return 0x50 | (addr & 0x0F);
+    // Address bits from ADDR pin (4 bits for IS31FL3737)
+    return 0x50 | (static_cast<uint8_t>(addr) & 0x0F);
+}
+
+// IS31FL3737B Implementation  
+IS31FL3737B::IS31FL3737B(ADDR addr, TwoWire *wire) 
+    : IS31FL373x_Device(calculateAddress(addr), wire) {
+    // Update GFX dimensions
+    _width = MATRIX_WIDTH;
+    _height = MATRIX_HEIGHT;
+}
+
+uint8_t IS31FL3737B::calculateAddress(ADDR addr) {
+    // Base address: 0b1010000 (0x50)
+    // Address bits from ADDR pin (4 bits for IS31FL3737B)
+    return 0x50 | (static_cast<uint8_t>(addr) & 0x0F);
 }
 
 void IS31FL3737B::setPWMFrequency(uint8_t freq) {
@@ -331,6 +416,16 @@ void IS31FL373x_Canvas::drawPixel(int16_t x, int16_t y, uint16_t color) {
 void IS31FL373x_Canvas::identifyDevices() {
     // TODO: Implement device identification sequence
     // For now, just a placeholder
+}
+
+uint16_t IS31FL373x_Canvas::getTotalNonZeroPixelCount() const {
+    uint16_t totalCount = 0;
+    for (uint8_t i = 0; i < _deviceCount; i++) {
+        if (_devices[i] != nullptr) {
+            totalCount += _devices[i]->getNonZeroPixelCount();
+        }
+    }
+    return totalCount;
 }
 
 IS31FL373x_Device* IS31FL373x_Canvas::getDeviceForCoordinate(int16_t x, int16_t y, 

@@ -1,337 +1,151 @@
 # Arduino Driver for IS31FL373x LED Matrices
 
-A performance-focused, multi-chip Arduino driver for the Lumissil **IS31FL3733 (12x16)** and **IS31FL3737B (12x12)** LED matrix controllers. This library provides a unified interface for both chips with proper addressing to prevent hardware conflicts and LED aliasing issues.
+A performance-focused, multi-chip Arduino driver for the Lumissil **IS31FL3733 (12x16)**, **IS31FL3737 (12x12)**, and **IS31FL3737B (12x12)** LED matrix controllers. This library provides a unified API for all three chips, with robust, model-specific code to prevent hardware conflicts and visual artifacts.
 
 ## Key Features
 
-* **Correct Chip-Specific Addressing:** Properly handles the different memory layouts of IS31FL3733 (12x16) vs IS31FL3737B (12x12) to prevent LED aliasing and register conflicts
-* **Hardware Compatibility Mode:** Supports using IS31FL3737 hardware with IS31FL3733 drivers via coordinate offset configuration
-* **Multi-Chip Canvas:** Seamlessly manage multiple driver chips as a single, large logical display for scrolling text or graphics
-* **Multi-Level Brightness Control:** Three-tier automatic brightness scaling system (hardware current, gamma correction, global dimming)
-* **ADDR Pin Constants:** Clean, readable addressing with `ADDR::GND`, `ADDR::VCC`, `ADDR::SDA`, `ADDR::SCL` constants
-* **Performance Monitoring:** Built-in FPS calculation for optimization and debugging
-* **Adafruit_GFX Integration:** Full compatibility with Adafruit GFX library for familiar graphics primitives (text, shapes, bitmaps)
-* **Buffered Operations:** Frame buffer approach prevents flickering - all drawing operations update locally, then push to hardware with `show()`
-* **Custom Layout Support:** Indexed drawing model with `setLayout()` for non-matrix arrangements (analog clocks, 14-segment displays, artistic patterns)
-* **Dual Drawing Models:** Standard coordinate-based `drawPixel(x, y)` for matrices, plus indexed `setPixel(index)` for custom layouts
+*   **Chip-Specific Drivers:** Dedicated classes for each chip model correctly handle different memory maps and feature sets, preventing common aliasing issues.
+*   **Multi-Chip Canvas:** Seamlessly manage multiple driver chips as a single, large logical display for scrolling text or graphics.
+*   **Advanced Brightness Control:**
+    *   **Hardware Current:** Sets the maximum brightness via the Global Current Control register.
+    *   **Software Master Brightness:** Easy application-level brightness scaling.
+*   **Adafruit_GFX Integration:** Full compatibility for familiar graphics primitives (text, shapes, bitmaps).
+*   **Buffered Operations:** A frame buffer prevents flickering; drawing operations update a local buffer, then push to hardware atomically with `show()`.
+*   **Custom Layout Support:** An indexed drawing model (`setLayout()`, `setPixel(index)`) for non-matrix arrangements like analog clocks or 14-segment displays.
+*   **State Inspection:** Methods to verify configuration and buffer state for debugging.
 
-## Architectural Philosophy
+## Chip Comparison & Driver Selection
 
-The library is designed with a three-layer architecture to separate concerns and provide the right level of abstraction for any project:
+**Important:** These are physically distinct chips. You **must** use the driver class that exactly matches your hardware to ensure correct operation.
 
-1. **Core Device Layer:** Provides direct, low-level control over a single IS31FL373x chip's hardware features.
-2. **Graphics Layer:** Integrates the Core Device with `Adafruit_GFX`, enabling a rich set of drawing functions on a single matrix.
-3. **Canvas Manager Layer:** The highest-level abstraction, managing an array of Core Devices as one contiguous display canvas.
+| Physical Chip | Driver Class | Matrix Size | I2C Address Pins | I2C Addresses | Key Hardware Feature |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **IS31FL3733** | `IS31FL3733` | 12×16 (192 LEDs) | 2 (`ADDR1`, `ADDR2`) | **16** | Largest matrix |
+| **IS31FL3737** | `IS31FL3737` | 12×12 (144 LEDs) | 1 (`ADDR`) | **4** | Fixed PWM Frequency |
+| **IS31FL3737B**| `IS31FL3737B`| 12×12 (144 LEDs) | 1 (`ADDR`) | **4** | **Selectable PWM Frequency** |
+
+### How to Choose the Right Chip for Your Project:
+
+1.  **Need maximum LEDs or 16 I2C addresses?** → **IS31FL3733**
+2.  **Building a simple 12x12 matrix and don't need PWM control?** → **IS31FL3737**
+3.  **Need to adjust PWM frequency (e.g., to avoid camera flicker or audible noise)?** → **IS31FL3737B**
+
+## API Reference
+
+The full API reference is available in the [IS31FL373x-reference.md](doc/IS31FL373x-reference.md) file.
 
 ## Example Usage
 
-#### Basic Usage (Single Matrix)
+#### Basic Initialization (Single Matrix)
 
 ```cpp
 #include "IS31FL373x.h"
 
-// Use the appropriate class for your chip
-IS31FL3737B matrix;  // For 12x12 IS31FL3737B chip
-// IS31FL3733 matrix; // For 12x16 IS31FL3733 chip
+// Choose the class that matches your hardware chip. They are NOT interchangeable!
+// IS31FL3733 matrix(ADDR::GND, ADDR::VCC); // For IS31FL3733 chip (12x16)
+// IS31FL3737 matrix(ADDR::GND);               // For IS31FL3737 chip (12x12)
+IS31FL3737B matrix(ADDR::GND);                  // For IS31FL3737B chip (12x12)
 
 void setup() {
   matrix.begin();
-  matrix.setGlobalCurrent(128);     // Hardware brightness control
-  matrix.setMasterBrightness(255);  // Software brightness scaling
+  matrix.setGlobalCurrent(128);     // Set hardware current (0-255)
+  matrix.setMasterBrightness(255);  // Set application brightness (software, 0-255)
+
+  // For IS31FL3737B only:
+  // matrix.setPWMFrequency(PWM_FREQ_26_7_KHZ);
 }
 
 void loop() {
   matrix.clear();
   matrix.drawPixel(5, 5, 255);      // Draw at (x=5, y=5) with max brightness
-  matrix.drawLine(0, 0, 11, 11, 128); // Diagonal line
   matrix.show();                     // Push buffer to hardware
-  delay(1000);
-}
-```
-
-#### Modern Addressing with ADDR Constants
-
-```cpp
-#include "IS31FL373x.h"
-
-// ✅ CLEAN: Use ADDR constants for readable addressing
-IS31FL3737B matrix_3737(ADDR::GND);           // Single ADDR pin
-IS31FL3733 matrix_3733(ADDR::VCC, ADDR::SDA); // Dual ADDR pins
-
-void setup() {
-  // Multi-level brightness control
-  matrix_3737.begin();
-  matrix_3737.setGlobalCurrent(128);      // Hardware current (power/heat)
-  matrix_3737.setGammaCorrection(true);   // Perceptual linearity
-  matrix_3737.setGlobalDimming(200);      // App-level brightness (0-255)
-}
-
-void loop() {
-  matrix_3737.clear();
-  matrix_3737.drawPixel(10, 5, 255);  // Automatic scaling: gamma → dimming → hardware
-  matrix_3737.show();
   
-  // Performance monitoring
-  Serial.print("FPS: ");
-  Serial.println(matrix_3737.getFPS());
-  delay(1000);
+  // FPS monitoring would require implementation
+  Serial.println("Frame updated");
+  delay(100);
 }
 ```
 
-## Complete Examples
-
-The `examples/` folder contains three complete, buildable examples demonstrating real-world usage patterns:
-
-### [LED_Sign_Multi_Chip.cpp](examples/LED_Sign_Multi_Chip.cpp)
-**Multi-chip scrolling LED sign** - Based on the DisplayManager pattern
-- 3-chip horizontal canvas (36x12 display)
-- Light sensor brightness adaptation
-- Multi-level brightness control demonstration
-- Performance monitoring with FPS calculation
-
-### [Segment_Display_Terminal.cpp](examples/Segment_Display_Terminal.cpp) 
-**Large 14-segment display terminal** - Based on the 14-segment terminal pattern
-- 16 chips with all ADDR combinations (32x6 characters)
-- Custom coordinate mapping for segment displays
-- Time-based brightness control
-- Character set and pattern demonstrations
-
-### [Analog_LED_Clock.cpp](examples/Analog_LED_Clock.cpp)
-**Analog-style LED clock** - Based on the Orbitchron clock pattern  
-- Single chip with IS31FL3737 hardware compatibility
-- Direct coordinate access with automatic offset handling
-- Smooth animations with gamma correction
-- Power management for battery operation
-
-#### Multi-Chip Canvas Example
+#### Multi-Chip Canvas
 
 ```cpp
 #include "IS31FL373x.h"
 
-// Three chips with clean ADDR constants
-IS31FL3737B matrix1(ADDR::GND), matrix2(ADDR::VCC), matrix3(ADDR::SDA);
+// Three IS31FL3737 chips with different addresses
+IS31FL3737 matrix1(ADDR::GND), matrix2(ADDR::VCC), matrix3(ADDR::SDA);
 IS31FL373x_Device* devices[] = {&matrix1, &matrix2, &matrix3};
 
 IS31FL373x_Canvas canvas(36, 12, devices, 3, LAYOUT_HORIZONTAL);
 
 void setup() {
-  canvas.begin();                    // Initialize all chips
-  canvas.setGlobalCurrent(100);      // Hardware brightness for all
-  canvas.setGammaCorrection(true);   // Smooth transitions
+  canvas.begin();
+  canvas.setGlobalCurrent(100);
 }
 
 void loop() {
   canvas.clear();
   canvas.setCursor(0, 2);
-  canvas.print("SCROLLING TEXT");    // Text across all chips
-  canvas.show();                     // Update all chips atomically
-  delay(1000);
+  canvas.print("SCROLLING TEXT");
+  canvas.show();
 }
 ```
 
-#### Custom Layout Mapping (Non-Matrix Arrangements)
+#### Custom Layout Mapping (e.g., Analog Clock)
 
-For projects like analog clocks, 14-segment displays, or artistic LED arrangements, you can map LEDs to custom layouts using the indexed drawing model.
+This powerful feature abstracts the physical wiring from your drawing logic.
 
 ```cpp
 #include "IS31FL373x.h"
 
-IS31FL3737B matrix;
+IS31FL3737 matrix; // Using a 12x12 chip for this layout
 
-// Define custom layout: 12 LEDs arranged in a clock face
+// Map 12 logical indices (0-11 for hours) to physical (CS, SW) pins
 PixelMapEntry clockLayout[12] = {
-  {6, 1},   // 12 o'clock -> CS6, SW1
-  {9, 2},   // 1 o'clock  -> CS9, SW2  
-  {12, 4},  // 2 o'clock  -> CS12, SW4
-  {12, 6},  // 3 o'clock  -> CS12, SW6
-  {12, 9},  // 4 o'clock  -> CS12, SW9
-  {9, 11},  // 5 o'clock  -> CS9, SW11
-  {6, 12},  // 6 o'clock  -> CS6, SW12
-  {3, 11},  // 7 o'clock  -> CS3, SW11
-  {1, 9},   // 8 o'clock  -> CS1, SW9
-  {1, 6},   // 9 o'clock  -> CS1, SW6
-  {1, 4},   // 10 o'clock -> CS1, SW4
-  {3, 2}    // 11 o'clock -> CS3, SW2
+  {6, 1}, {9, 2}, {12, 4}, {12, 6}, {12, 9}, {9, 11},
+  {6, 12}, {3, 11}, {1, 9}, {1, 6}, {1, 4}, {3, 2}
 };
 
 void setup() {
   matrix.begin();
-  
-  // Apply the custom layout mapping
-  matrix.setLayout(clockLayout, 12);
-  
+  matrix.setLayout(clockLayout, 12); // Apply the custom map
   matrix.setGlobalCurrent(128);
 }
 
 void loop() {
   matrix.clear();
-  
-  // Draw clock hands using logical indices (0-11)
-  int hour = 3;     // 3 o'clock position  
-  int minute = 6;   // 6 o'clock position
-  
-  matrix.setPixel(hour, 255);    // Hour hand - bright
-  matrix.setPixel(minute, 128);  // Minute hand - dimmer
-  matrix.setPixel(0, 64);        // 12 o'clock marker - dim
-  
+  // Draw using logical indices, not (x,y) coordinates
+  int hour = 3;
+  matrix.setPixel(hour, 255); // Light up the LED at logical index 3
   matrix.show();
   delay(1000);
 }
 ```
 
-#### 14-Segment Display Example
+## Installation
 
-```cpp
-#include "IS31FL373x.h"
-
-IS31FL3737B matrix;
-
-// Map 14 segments of a single digit to hardware pins
-PixelMapEntry segmentLayout[14] = {
-  {1, 1}, {2, 1},   // A1, A2 (top segments)
-  {3, 2}, {3, 3},   // B, C (right segments)  
-  {2, 4}, {1, 4},   // D1, D2 (bottom segments)
-  {1, 3}, {1, 2},   // E, F (left segments)
-  {2, 2}, {2, 3},   // G1, G2 (middle segments)
-  {3, 1}, {1, 5},   // H, J (diagonal segments)
-  {2, 5}, {3, 4}    // K, L (diagonal segments)
-};
-
-// Segment patterns for digits (bit 0 = segment A1, bit 1 = segment A2, etc.)
-uint16_t digitPatterns[10] = {
-  0b0000110000111111,  // '0'
-  0b0000000000000110,  // '1'
-  0b0001100011011011,  // '2'
-  // ... more patterns
-};
-
-void setup() {
-  matrix.begin();
-  matrix.setLayout(segmentLayout, 14);
-  matrix.setGlobalCurrent(150);
-}
-
-void displayDigit(int digit) {
-  matrix.clear();
-  
-  uint16_t pattern = digitPatterns[digit];
-  for (int segment = 0; segment < 14; segment++) {
-    if (pattern & (1 << segment)) {
-      matrix.setPixel(segment, 255);  // Light up this segment
-    }
-  }
-  
-  matrix.show();
-}
-
-void loop() {
-  for (int i = 0; i < 10; i++) {
-    displayDigit(i);
-    delay(500);
-  }
-}
-```
-
-## Custom Layout Design Guide
-
-### PixelMapEntry Structure
-```cpp
-struct PixelMapEntry {
-  uint8_t cs;  // Column/Source pin (1-16 for IS31FL3733, 1-12 for IS31FL3737B)  
-  uint8_t sw;  // Switch/Row pin (1-12 for both chips)
-};
-```
-
-### Design Process
-1. **Physical Mapping:** Identify which LED connects to which (CS, SW) pin on your hardware
-2. **Logical Ordering:** Decide on a logical sequence (e.g., clockwise for clock, left-to-right for digits)
-3. **Create Array:** Build `PixelMapEntry` array mapping logical index → hardware pins
-4. **Apply Layout:** Call `matrix.setLayout(yourLayout, arraySize)` 
-5. **Use Indexed Drawing:** Draw using `matrix.setPixel(logicalIndex, brightness)`
-
-### Benefits of Custom Layouts
-- **Clean Code:** Rendering logic uses meaningful indices instead of hardware coordinates
-- **Hardware Abstraction:** Change physical wiring without changing rendering code
-- **Reusable Patterns:** Same layout can work across different projects
-- **Easy Debugging:** Logical sequence makes it easy to test individual LEDs
-
-## Chip Differences & Compatibility
-
-| Feature | IS31FL3733 | IS31FL3737B |
-|---------|------------|-------------|
-| **Matrix Size** | 12×16 (192 LEDs) | 12×12 (144 LEDs) |
-| **Register Layout** | 16-byte stride with all columns valid | 16-byte stride with gaps (CS13-16 invalid) |
-| **I2C Address** | 2 ADDR pins (16 addresses) | 1 ADDR pin (16 addresses) |
-| **Driver Class** | `IS31FL3733` | `IS31FL3737B` |
-
-**⚠️ Important:** The IS31FL3737B uses a sparse register layout. Writing to non-existent CS13-16 addresses causes address pointer corruption and LED aliasing. This driver properly handles the differences.
-
-## Platform Support
-
-| Platform | Status | Notes |
-|----------|--------|-------|
-| **Teensy 4.1** | ✅ Fully Supported | Tested and working |
-| **ESP32** | ✅ Fully Supported | Tested and working |
-| **Raspberry Pi Pico** | 🚧 Work in Progress | Build issues under investigation |
-| **Arduino Uno/Nano** | 🔄 Not Tested | Should work but untested |
-
-## Installation & Testing
-
-### Arduino IDE
-1. Download and install this library
-2. Install dependencies: `Adafruit_GFX` and `Adafruit_BusIO`
-3. Open one of the examples: `File → Examples → IS31FL373x → LED_Sign_Multi_Chip`
-4. Upload and test with your hardware
-
-### PlatformIO
-1. Add to `platformio.ini`:
-```ini
-lib_deps = 
-    adafruit/Adafruit GFX Library
-    adafruit/Adafruit BusIO
-    # Add your IS31FL373x library here
-```
-2. Copy an example to your `src/main.cpp`
-3. Build and upload: `pio run -t upload`
-
-### Testing Your Setup
-The examples are designed to be buildable and testable:
-- **LED_Sign_Multi_Chip.cpp**: Test multi-chip canvas and brightness control
-- **Segment_Display_Terminal.cpp**: Verify all 16 address combinations
-- **Analog_LED_Clock.cpp**: Test hardware compatibility and coordinate mapping
-
-## Dependencies
-
-* Arduino `Wire.h` library
-* `Adafruit_GFX.h` library  
-* `Adafruit_BusIO.h` library
+1.  Install this library via the Arduino Library Manager or by cloning this repository.
+2.  Install dependencies from the Library Manager: `Adafruit GFX Library` and `Adafruit BusIO`.
+3.  Open an example sketch from `File → Examples → IS31FL373x` that matches your hardware setup.
 
 ## Troubleshooting
 
-### LED Aliasing Issues (IS31FL3737 hardware)
+#### LED Aliasing (LEDs light up in wrong locations)
 
-**Symptoms:** LEDs light up in unexpected locations (e.g., CS9 command affects CS7)
-**Cause:** Writing to non-existent CS13-16 registers causes address pointer corruption
-**Solution:** Use the correct driver class for your hardware:
-- **IS31FL3737 hardware** → Use `IS31FL3737B` class (automatically handles 12x12 layout)
-- **IS31FL3733 hardware** → Use `IS31FL3733` class (supports full 12x16 layout)
+*   **Symptom:** Commanding one LED (e.g., `drawPixel(9, 0, 255)`) causes a different LED (e.g., at x=7) to light up instead or in addition.
+*   **Cause:** You are using the wrong driver class for your physical chip (e.g., `IS31FL3733` class with an `IS31FL3737` chip). The driver is writing to memory addresses that don't exist, causing the chip's internal address pointer to corrupt.
+*   **Solution:** **Instantiate the class that exactly matches your hardware.**
+    *   If you have an IS31FL3737 chip, you **must** use `IS31FL3737 myMatrix;`.
+    *   If you have an IS31FL3733 chip, you **must** use `IS31FL3733 myMatrix;`.
 
-The driver automatically prevents writes to invalid registers when you use the correct class.
+#### Custom Layout Not Working
 
-### Custom Layout Issues
+*   Ensure your `PixelMapEntry` array correctly maps to your physical wiring (CS and SW pins are 1-indexed).
+*   Verify that `setLayout()` is called in `setup()` before any drawing commands.
+*   Check that the coordinates in your map are valid for your chip (e.g., `cs` cannot be greater than 12 for an IS31FL3737).
 
-**Wrong LEDs lighting up:** Check your `PixelMapEntry` array - ensure CS/SW values match your physical wiring
-**Nothing lights up:** Verify `setLayout()` is called before drawing, and array size matches the number of entries
-**Layout works partially:** Some entries may have invalid CS/SW coordinates (CS > chip width, SW > 12)
+## Project Roadmap
 
-### Build Issues
-
-**Pico Platform:** Currently experiencing dependency resolution issues.
-**Missing Libraries:** Ensure Adafruit_GFX and Adafruit_BusIO are installed via Library Manager.
-
-## Project Roadmap (Post V1.0)
-
-* Complete Raspberry Pi Pico platform support
-* Full API for the hardware **Auto-Breath Mode (ABM)** engine
-* API for reading **Open/Short circuit detection** registers
-* Support for the **audio modulation** feature
+*   Full support for the hardware **Auto-Breath Mode (ABM)** engine.
+*   Add software gamma correction to the library, to allow calibration of the LED brightness.
+*   API for reading **Open/Short circuit detection** registers for diagnostics.
+*   Complete Raspberry Pi Pico platform support.

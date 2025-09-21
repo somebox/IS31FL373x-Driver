@@ -5,6 +5,20 @@
 // Mock includes for unit testing
 #include <stdint.h>
 #include <string.h>
+#include <vector>
+
+// Simple mock tracking for I2C operations during testing
+struct MockI2COperation {
+    uint8_t addr;
+    uint8_t reg;
+    uint8_t value;
+    bool isWrite;
+};
+
+extern std::vector<MockI2COperation> mockI2COperations;
+void clearMockI2COperations();
+size_t getMockI2COperationCount();
+
 // Mock Arduino types and classes for testing
 class TwoWire {
 public:
@@ -17,6 +31,8 @@ public:
     Adafruit_GFX(int16_t w, int16_t h) : _width(w), _height(h) {}
     virtual ~Adafruit_GFX() = default;
     virtual void drawPixel(int16_t x, int16_t y, uint16_t color) = 0;
+    int16_t width() const { return _width; }
+    int16_t height() const { return _height; }
 protected:
     int16_t _width, _height;
 };
@@ -26,8 +42,9 @@ public:
     Adafruit_I2CDevice(uint8_t addr, TwoWire* wire = nullptr) : _addr(addr), _wire(wire) {}
     virtual ~Adafruit_I2CDevice() = default;
     bool begin() { return true; }
-    bool write(uint8_t* buffer, size_t len) { return true; }
+    bool write(uint8_t* buffer, size_t len);
     bool read(uint8_t* buffer, size_t len) { return true; }
+    uint8_t getAddr() const { return _addr; }
 private:
     uint8_t _addr;
     TwoWire* _wire;
@@ -41,11 +58,23 @@ private:
 #include <Adafruit_I2CDevice.h>
 #endif
 
+// Version
+#define IS31FL373X_VERSION "1.0.6"
+
 // Forward declarations for the unified driver architecture
 class IS31FL373x_Device;
 class IS31FL3733;
+class IS31FL3737;
 class IS31FL3737B;
 class IS31FL373x_Canvas;
+
+// ADDR pin constants for clean addressing
+enum class ADDR {
+    GND = 0,    // Connected to ground
+    VCC = 1,    // Connected to VCC
+    SDA = 2,    // Connected to SDA line
+    SCL = 3     // Connected to SCL line
+};
 
 // Common constants
 #define IS31FL373X_REG_UNLOCK      0xFE
@@ -136,6 +165,17 @@ public:
     // Coordinate conversion (public for testing)
     virtual uint16_t coordToIndex(uint8_t x, uint8_t y) const;
     virtual void indexToCoord(uint16_t index, uint8_t* x, uint8_t* y) const;
+    
+    // State inspection methods for testing
+    uint8_t getGlobalCurrent() const { return _globalCurrent; }
+    uint8_t getMasterBrightness() const { return _masterBrightness; }
+    uint8_t getPixelValue(uint16_t x, uint16_t y) const;
+    uint8_t getPixelValueByIndex(uint16_t index) const;
+    uint16_t getNonZeroPixelCount() const;
+    uint16_t getPixelSum() const;
+    bool isCustomLayoutActive() const { return _useCustomLayout; }
+    uint16_t getLayoutSize() const { return _layoutSize; }
+    uint8_t getI2CAddress() const { return _addr; }
 };
 
 /**
@@ -147,7 +187,7 @@ public:
     static const uint8_t MATRIX_HEIGHT = 12;
     static const uint16_t PWM_BUFFER_SIZE = 192; // 12 * 16
     
-    IS31FL3733(uint8_t addr1 = 0, uint8_t addr2 = 0, TwoWire *wire = &Wire);
+    IS31FL3733(ADDR addr1 = ADDR::GND, ADDR addr2 = ADDR::GND, TwoWire *wire = &Wire);
     
     uint8_t getWidth() const override { return MATRIX_WIDTH; }
     uint8_t getHeight() const override { return MATRIX_HEIGHT; }
@@ -155,7 +195,27 @@ public:
     uint8_t getRegisterStride() const override { return 16; }  // IS31FL3733 uses 16-byte stride
 
 private:
-    uint8_t calculateAddress(uint8_t addr1, uint8_t addr2);
+    uint8_t calculateAddress(ADDR addr1, ADDR addr2);
+};
+
+/**
+ * Driver for IS31FL3737 (12x12 matrix)
+ */
+class IS31FL3737 : public IS31FL373x_Device {
+public:
+    static const uint8_t MATRIX_WIDTH = 12;
+    static const uint8_t MATRIX_HEIGHT = 12;
+    static const uint16_t PWM_BUFFER_SIZE = 144; // 12 * 12
+    
+    IS31FL3737(ADDR addr = ADDR::GND, TwoWire *wire = &Wire);
+    
+    uint8_t getWidth() const override { return MATRIX_WIDTH; }
+    uint8_t getHeight() const override { return MATRIX_HEIGHT; }
+    uint16_t getPWMBufferSize() const override { return PWM_BUFFER_SIZE; }
+    uint8_t getRegisterStride() const override { return 16; }  // IS31FL3737 uses 16-byte stride (same as others)
+
+private:
+    uint8_t calculateAddress(ADDR addr);
 };
 
 /**
@@ -167,18 +227,18 @@ public:
     static const uint8_t MATRIX_HEIGHT = 12;
     static const uint16_t PWM_BUFFER_SIZE = 144; // 12 * 12
     
-    IS31FL3737B(uint8_t addr = 0, TwoWire *wire = &Wire);
+    IS31FL3737B(ADDR addr = ADDR::GND, TwoWire *wire = &Wire);
     
     uint8_t getWidth() const override { return MATRIX_WIDTH; }
     uint8_t getHeight() const override { return MATRIX_HEIGHT; }
     uint16_t getPWMBufferSize() const override { return PWM_BUFFER_SIZE; }
     uint8_t getRegisterStride() const override { return 16; }  // IS31FL3737B still uses 16-byte stride in registers
     
-    // 3737B-specific features
-    void setPWMFrequency(uint8_t freq);
+    // IS31FL3737B-specific features
+    void setPWMFrequency(uint8_t freq);  // Selectable PWM frequency: 1.05-26.7 kHz
 
 private:
-    uint8_t calculateAddress(uint8_t addr);
+    uint8_t calculateAddress(ADDR addr);
 };
 
 /**
@@ -206,6 +266,14 @@ public:
     
     // Device identification helper
     void identifyDevices();
+    
+    // State inspection methods for testing
+    uint8_t getDeviceCount() const { return _deviceCount; }
+    IS31FL373x_Device* getDevice(uint8_t index) const { 
+        return (index < _deviceCount) ? _devices[index] : nullptr; 
+    }
+    CanvasLayout getLayout() const { return _layout; }
+    uint16_t getTotalNonZeroPixelCount() const;
 
 private:
     IS31FL373x_Device** _devices;

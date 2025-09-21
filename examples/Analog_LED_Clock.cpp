@@ -24,8 +24,8 @@
 #include "IS31FL373x.h"
 #include <math.h>
 
-// Single IS31FL3737 chip using IS31FL3733 driver for compatibility
-IS31FL3733 matrix(ADDR::GND, ADDR::GND);  // Address: 0x50
+// Single IS31FL3737 hardware chip with proper driver class
+IS31FL3737 matrix(ADDR::GND);  // Address: 0x50
 
 // Clock configuration
 const uint8_t MATRIX_SIZE = 12;           // 12x12 LED matrix
@@ -83,15 +83,14 @@ void setup() {
     
     Serial.println("LED matrix initialized successfully!");
     
-    // CRITICAL: Set coordinate offset for IS31FL3737 hardware compatibility
-    matrix.setCoordinateOffset(2, 0);  // CS adjustment for IS31FL3737
+    // No coordinate offset needed - using proper IS31FL3737 driver class
     
     // Configure brightness and power management
     matrix.setGlobalCurrent(240);      // Hardware brightness (high for visibility)
     matrix.setGammaCorrection(true);   // Smooth LED transitions
     matrix.setGlobalDimming(180);      // Power management (70% of max)
     
-    Serial.println("Hardware compatibility configured");
+    Serial.println("Native IS31FL3737 driver configured");
     Serial.println("Power management: 70% brightness limit");
     Serial.println("Starting clock display...");
     Serial.println();
@@ -310,9 +309,9 @@ float mapWithEasing(float value, float in_min, float in_max, float out_min, floa
  * USAGE NOTES:
  * 
  * 1. HARDWARE COMPATIBILITY:
- *    - setCoordinateOffset(2, 0) handles IS31FL3737 CS pin mapping
- *    - Adjust offset if your hardware uses different pin labeling
- *    - Test with simple patterns first to verify coordinate mapping
+ *    - Uses native IS31FL3737 driver class - no coordinate offset needed
+ *    - Driver class matches hardware chip for intuitive usage
+ *    - Test with simple patterns first to verify functionality
  * 
  * 2. COORDINATE SYSTEM:
  *    - Uses standard Cartesian coordinates (0-11, 0-11)
@@ -337,7 +336,7 @@ float mapWithEasing(float value, float in_min, float in_max, float out_min, floa
  *    - Add additional features like alarms or date display
  * 
  * 6. TROUBLESHOOTING:
- *    - If wrong LEDs light up, adjust coordinate offset
- *    - Check I2C address matches your ADDR pin configuration
+ *    - If wrong LEDs light up, verify IS31FL3737 hardware vs driver class match
+ *    - Check I2C address matches your ADDR pin configuration  
  *    - Verify power supply can handle LED current draw
  */
