@@ -59,7 +59,7 @@ private:
 #endif
 
 // Version
-#define IS31FL373X_VERSION "1.0.6"
+#define IS31FL373X_VERSION "1.0.7"
 
 // Forward declarations for the unified driver architecture
 class IS31FL373x_Device;
@@ -117,7 +117,7 @@ public:
     virtual uint8_t getWidth() const = 0;
     virtual uint8_t getHeight() const = 0;
     virtual uint16_t getPWMBufferSize() const = 0;
-    virtual uint8_t getRegisterStride() const = 0;  // 16 for IS31FL3733, 12 for IS31FL3737B
+    virtual uint8_t getRegisterStride() const = 0;  // 16 for all chips (IS31FL3733, IS31FL3737, IS31FL3737B)
     
     // Display control
     virtual void show();

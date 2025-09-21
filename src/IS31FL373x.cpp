@@ -128,18 +128,16 @@ void IS31FL373x_Device::show() {
     // Switch to PWM page
     selectPage(IS31FL373X_PAGE_PWM);
     
-    // Write PWM buffer to device, respecting chip's register layout
-    // IS31FL3737B: Only write to valid register addresses (skip CS13-16 gaps)
-    // IS31FL3733: Write to all 16 columns per row
+    // Write PWM buffer to device using proper coordinate transformation
+    // This ensures correct mapping between buffer coordinates and hardware registers
     
     uint8_t width = getWidth();
     uint8_t height = getHeight();
-    uint8_t stride = getRegisterStride();
     
     for (uint8_t row = 0; row < height; row++) {
         for (uint8_t col = 0; col < width; col++) {
             uint16_t bufferIndex = row * width + col;  // Linear buffer index
-            uint16_t regAddress = row * stride + col;   // Hardware register address
+            uint16_t regAddress = coordToIndex(col, row);  // Use proper coordinate transformation
             
             if (bufferIndex < getPWMBufferSize()) {
                 writeRegister(regAddress, _pwmBuffer[bufferIndex]);
@@ -327,8 +325,17 @@ IS31FL3737::IS31FL3737(ADDR addr, TwoWire *wire)
 
 uint8_t IS31FL3737::calculateAddress(ADDR addr) {
     // Base address: 0b1010000 (0x50)
-    // Address bits from ADDR pin (4 bits for IS31FL3737)
-    return 0x50 | (static_cast<uint8_t>(addr) & 0x0F);
+    // Address bits from ADDR pin mapping per IS31FL373x-reference.md:
+    // GND=0000, SCL=0101, SDA=1010, VCC=1111
+    uint8_t addrBits;
+    switch(addr) {
+        case ADDR::GND: addrBits = 0b0000; break;  // 0x0
+        case ADDR::SCL: addrBits = 0b0101; break;  // 0x5  
+        case ADDR::SDA: addrBits = 0b1010; break;  // 0xA
+        case ADDR::VCC: addrBits = 0b1111; break;  // 0xF
+        default: addrBits = 0b0000; break;
+    }
+    return 0x50 | addrBits;
 }
 
 // IS31FL3737B Implementation  
@@ -341,8 +348,17 @@ IS31FL3737B::IS31FL3737B(ADDR addr, TwoWire *wire)
 
 uint8_t IS31FL3737B::calculateAddress(ADDR addr) {
     // Base address: 0b1010000 (0x50)
-    // Address bits from ADDR pin (4 bits for IS31FL3737B)
-    return 0x50 | (static_cast<uint8_t>(addr) & 0x0F);
+    // Address bits from ADDR pin mapping per IS31FL373x-reference.md:
+    // GND=0000, SCL=0101, SDA=1010, VCC=1111
+    uint8_t addrBits;
+    switch(addr) {
+        case ADDR::GND: addrBits = 0b0000; break;  // 0x0
+        case ADDR::SCL: addrBits = 0b0101; break;  // 0x5  
+        case ADDR::SDA: addrBits = 0b1010; break;  // 0xA
+        case ADDR::VCC: addrBits = 0b1111; break;  // 0xF
+        default: addrBits = 0b0000; break;
+    }
+    return 0x50 | addrBits;
 }
 
 void IS31FL3737B::setPWMFrequency(uint8_t freq) {

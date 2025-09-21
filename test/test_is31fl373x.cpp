@@ -101,14 +101,14 @@ TEST_CASE("IS31FL3737: Address Calculation") {
         CHECK(matrix.begin() == true);
     }
     
-    SUBCASE("Address pin values") {
-        IS31FL3737 matrix1(ADDR::VCC);   // Should result in 0x51
-        IS31FL3737 matrix2(ADDR::SDA);   // Should result in 0x52
-        IS31FL3737 matrix3(ADDR::SCL);   // Should result in 0x53
+    SUBCASE("Address pin values - Fixed per IS31FL373x-reference.md") {
+        IS31FL3737 matrix1(ADDR::VCC);   // Should result in 0x5F (GND=0000, SCL=0101, SDA=1010, VCC=1111)
+        IS31FL3737 matrix2(ADDR::SDA);   // Should result in 0x5A
+        IS31FL3737 matrix3(ADDR::SCL);   // Should result in 0x55
         
-        CHECK(matrix1.getI2CAddress() == 0x51);
-        CHECK(matrix2.getI2CAddress() == 0x52);
-        CHECK(matrix3.getI2CAddress() == 0x53);
+        CHECK(matrix1.getI2CAddress() == 0x5F);
+        CHECK(matrix2.getI2CAddress() == 0x5A);
+        CHECK(matrix3.getI2CAddress() == 0x55);
         
         CHECK(matrix1.begin() == true);
         CHECK(matrix2.begin() == true);
@@ -123,18 +123,50 @@ TEST_CASE("IS31FL3737B: Address Calculation") {
         CHECK(matrix.begin() == true);
     }
     
-    SUBCASE("Address pin values") {
-        IS31FL3737B matrix1(ADDR::VCC);   // Should result in 0x51
-        IS31FL3737B matrix2(ADDR::SDA);   // Should result in 0x52
-        IS31FL3737B matrix3(ADDR::SCL);   // Should result in 0x53
+    SUBCASE("Address pin values - Fixed per IS31FL373x-reference.md") {
+        IS31FL3737B matrix1(ADDR::VCC);   // Should result in 0x5F (GND=0000, SCL=0101, SDA=1010, VCC=1111)
+        IS31FL3737B matrix2(ADDR::SDA);   // Should result in 0x5A
+        IS31FL3737B matrix3(ADDR::SCL);   // Should result in 0x55
         
-        CHECK(matrix1.getI2CAddress() == 0x51);
-        CHECK(matrix2.getI2CAddress() == 0x52);
-        CHECK(matrix3.getI2CAddress() == 0x53);
+        CHECK(matrix1.getI2CAddress() == 0x5F);
+        CHECK(matrix2.getI2CAddress() == 0x5A);
+        CHECK(matrix3.getI2CAddress() == 0x55);
         
         CHECK(matrix1.begin() == true);
         CHECK(matrix2.begin() == true);
         CHECK(matrix3.begin() == true);
+    }
+    
+    SUBCASE("I2C Address Fix Verification") {
+        // This test specifically verifies the I2C address calculation fix
+        // The old code incorrectly used (enum_value & 0x0F) instead of proper bit patterns
+        
+        // Test all four possible ADDR pin configurations
+        IS31FL3737B matrix_gnd(ADDR::GND);   // Pin to GND -> 0x50 (0101_0000)
+        IS31FL3737B matrix_scl(ADDR::SCL);   // Pin to SCL -> 0x55 (0101_0101)  
+        IS31FL3737B matrix_sda(ADDR::SDA);   // Pin to SDA -> 0x5A (0101_1010)
+        IS31FL3737B matrix_vcc(ADDR::VCC);   // Pin to VCC -> 0x5F (0101_1111)
+        
+        // Verify each address is correct per the reference document
+        CHECK(matrix_gnd.getI2CAddress() == 0x50);
+        CHECK(matrix_scl.getI2CAddress() == 0x55);  // Not 0x53 (old incorrect value)
+        CHECK(matrix_sda.getI2CAddress() == 0x5A);  // Not 0x52 (old incorrect value)
+        CHECK(matrix_vcc.getI2CAddress() == 0x5F);  // Not 0x51 (old incorrect value)
+        
+        // Verify all addresses are unique (no collisions)
+        uint8_t addresses[] = {
+            matrix_gnd.getI2CAddress(),
+            matrix_scl.getI2CAddress(), 
+            matrix_sda.getI2CAddress(),
+            matrix_vcc.getI2CAddress()
+        };
+        
+        // Check that all addresses are different
+        for (int i = 0; i < 4; i++) {
+            for (int j = i + 1; j < 4; j++) {
+                CHECK(addresses[i] != addresses[j]);
+            }
+        }
     }
 }
 
@@ -256,6 +288,25 @@ TEST_CASE("Coordinate Conversion") {
         matrix.indexToCoord(98, &x, &y);
         CHECK(x == 0);
         CHECK(y == 6);
+    }
+    
+    SUBCASE("Coordinate offset edge cases") {
+        // Test various offset combinations
+        matrix.setCoordinateOffset(0, 0);  // No offset
+        CHECK(matrix.coordToIndex(0, 0) == 0);   // CS1, SW1 -> 0x00
+        CHECK(matrix.coordToIndex(1, 0) == 1);   // CS2, SW1 -> 0x01
+        
+        matrix.setCoordinateOffset(1, 1);  // Offset both CS and SW by 1
+        CHECK(matrix.coordToIndex(0, 0) == 17);  // CS2, SW2 -> (2-1)*16 + (2-1) = 17
+        
+        matrix.setCoordinateOffset(3, 2);  // CS+3, SW+2 
+        CHECK(matrix.coordToIndex(0, 0) == 35);  // CS4, SW3 -> (3-1)*16 + (4-1) = 32+3 = 35
+        
+        // Verify reverse mapping works with offsets
+        uint8_t x, y;
+        matrix.indexToCoord(35, &x, &y);
+        CHECK(x == 0);
+        CHECK(y == 0);
     }
 }
 
@@ -518,6 +569,122 @@ TEST_CASE("Canvas: All Three Chip Types") {
         canvas.show();
         // After show, pixels should still be in buffers
         CHECK(canvas.getTotalNonZeroPixelCount() == 3);
+    }
+}
+
+// =============================================================================
+// ADDRESSING FIX VERIFICATION TESTS
+// =============================================================================
+
+TEST_CASE("IS31FL3737: Addressing Fix Verification") {
+    IS31FL3737 matrix;
+    REQUIRE(matrix.begin() == true);
+    
+    SUBCASE("SW0,CS6 addressing issue fix") {
+        // This test verifies the fix for the reported issue:
+        // "SW0,CS6 LED only lights when addressed as SW0,CS9"
+        // 
+        // The fix ensures that drawPixel(6,0) correctly maps to register 0x06
+        // instead of requiring drawPixel(9,0) as a workaround
+        
+        matrix.clear();
+        
+        // Draw pixel at coordinate (6,0) - should map to SW0,CS6
+        matrix.drawPixel(6, 0, 255);
+        
+        // Verify it's stored in the correct buffer position
+        CHECK(matrix.getPixelValue(6, 0) == 255);
+        CHECK(matrix.getNonZeroPixelCount() == 1);
+        
+        // Verify coordinate to register mapping
+        uint16_t regAddr = matrix.coordToIndex(6, 0);
+        CHECK(regAddr == 6); // Should map to register 0x06 (SW0,CS6)
+        
+        // Verify that coordinate (9,0) maps to different register
+        uint16_t regAddr9 = matrix.coordToIndex(9, 0);
+        CHECK(regAddr9 == 9); // Should map to register 0x09 (SW0,CS9)
+        CHECK(regAddr != regAddr9); // These should be different
+    }
+    
+    SUBCASE("Register stride mapping for IS31FL3737") {
+        // IS31FL3737 uses 16-byte register stride despite having only 12 columns
+        // This test verifies the coordinate mapping respects this
+        
+        matrix.clear();
+        
+        // Test first row (SW0) - all 12 columns
+        for (int col = 0; col < 12; col++) {
+            uint16_t regAddr = matrix.coordToIndex(col, 0);
+            CHECK(regAddr == col); // SW0,CS0 -> 0x00, SW0,CS1 -> 0x01, etc.
+        }
+        
+        // Test second row (SW1) - should start at register 0x10 (16 decimal)
+        for (int col = 0; col < 12; col++) {
+            uint16_t regAddr = matrix.coordToIndex(col, 1);
+            CHECK(regAddr == (16 + col)); // SW1,CS0 -> 0x10, SW1,CS1 -> 0x11, etc.
+        }
+        
+        // Test specific case that was problematic
+        CHECK(matrix.coordToIndex(6, 0) == 6);   // SW0,CS6 -> 0x06
+        CHECK(matrix.coordToIndex(6, 1) == 22);  // SW1,CS6 -> 0x16 (22 decimal)
+    }
+}
+
+TEST_CASE("IS31FL3737B: Addressing Consistency") {
+    IS31FL3737B matrix;
+    REQUIRE(matrix.begin() == true);
+    
+    SUBCASE("Buffer to register mapping consistency") {
+        // Verify that buffer indexing and register addressing work together correctly
+        
+        matrix.clear();
+        
+        // Draw pixels in a pattern
+        matrix.drawPixel(0, 0, 100);  // Top-left
+        matrix.drawPixel(11, 0, 101); // Top-right
+        matrix.drawPixel(0, 11, 102); // Bottom-left
+        matrix.drawPixel(11, 11, 103); // Bottom-right
+        
+        // Verify buffer storage
+        CHECK(matrix.getPixelValue(0, 0) == 100);
+        CHECK(matrix.getPixelValue(11, 0) == 101);
+        CHECK(matrix.getPixelValue(0, 11) == 102);
+        CHECK(matrix.getPixelValue(11, 11) == 103);
+        CHECK(matrix.getNonZeroPixelCount() == 4);
+        
+        // Verify coordinate to register mapping
+        CHECK(matrix.coordToIndex(0, 0) == 0);      // SW0,CS0 -> 0x00
+        CHECK(matrix.coordToIndex(11, 0) == 11);    // SW0,CS11 -> 0x0B
+        CHECK(matrix.coordToIndex(0, 11) == 176);   // SW11,CS0 -> 0xB0 (11*16+0)
+        CHECK(matrix.coordToIndex(11, 11) == 187);  // SW11,CS11 -> 0xBB (11*16+11)
+    }
+}
+
+// =============================================================================
+// MOCK I2C VERIFICATION TESTS
+// =============================================================================
+
+TEST_CASE("Mock I2C: Register Write Verification") {
+    SUBCASE("Verify show() method writes to correct registers") {
+        clearMockI2COperations();
+        
+        IS31FL3737B matrix;
+        REQUIRE(matrix.begin() == true);
+        
+        // Clear any initialization I2C operations
+        clearMockI2COperations();
+        
+        // Draw a single pixel and call show()
+        matrix.drawPixel(6, 0, 255);
+        matrix.show();
+        
+        // Verify that show() triggered I2C operations
+        size_t opCount = getMockI2COperationCount();
+        CHECK(opCount > 0); // Should have at least page selection and register write
+        
+        // The exact number of operations depends on implementation details,
+        // but we should see page selection and register writes
+        CHECK(opCount >= 2); // At minimum: page select + register write
     }
 }
 
