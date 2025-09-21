@@ -338,6 +338,40 @@ uint8_t IS31FL3737::calculateAddress(ADDR addr) {
     return 0x50 | addrBits;
 }
 
+uint16_t IS31FL3737::coordToIndex(uint8_t x, uint8_t y) const {
+    // IS31FL3737 hardware quirk: CS6-CS11 (columns 6-11) map to register addresses 8-13
+    // This is because the IS31FL3737 has gaps in its register mapping
+    // Based on working implementation: if (cs >= 6 && cs < 12) cs += 2;
+    
+    // Apply coordinate offsets for hardware compatibility
+    uint8_t cs = x + _csOffset + 1;  // Convert to 1-based CS (CSx)
+    uint8_t sw = y + _swOffset + 1;  // Convert to 1-based SW (SWy)
+    
+    // Apply IS31FL3737 hardware remapping for CS6-CS11
+    if (cs >= 7 && cs <= 12) {  // CS7-CS12 in 1-based (6-11 in 0-based)
+        cs += 2;  // Remap to CS9-CS14 (8-13 in 0-based)
+    }
+    
+    // Use chip-specific register mapping formula: Address = (SWy - 1) * stride + (CSx - 1)
+    return static_cast<uint16_t>((sw - 1) * getRegisterStride() + (cs - 1));
+}
+
+void IS31FL3737::indexToCoord(uint16_t index, uint8_t* x, uint8_t* y) const {
+    // Reverse the hardware register mapping with IS31FL3737 quirk
+    uint8_t stride = getRegisterStride();
+    uint8_t cs = (index % stride) + 1;  // Extract CS (1-based)
+    uint8_t sw = (index / stride) + 1;  // Extract SW (1-based)
+    
+    // Reverse the IS31FL3737 hardware remapping for CS9-CS14 (8-13 in 0-based)
+    if (cs >= 9 && cs <= 14) {  // CS9-CS14 in 1-based (8-13 in 0-based)
+        cs -= 2;  // Reverse remap to CS7-CS12 (6-11 in 0-based)
+    }
+    
+    // Convert back to 0-based coordinates and apply offsets
+    if (x != nullptr) *x = cs - 1 - _csOffset;
+    if (y != nullptr) *y = sw - 1 - _swOffset;
+}
+
 // IS31FL3737B Implementation  
 IS31FL3737B::IS31FL3737B(ADDR addr, TwoWire *wire) 
     : IS31FL373x_Device(calculateAddress(addr), wire) {

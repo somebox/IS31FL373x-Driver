@@ -59,7 +59,7 @@ private:
 #endif
 
 // Version
-#define IS31FL373X_VERSION "1.0.7"
+#define IS31FL373X_VERSION "1.0.8"
 
 // Forward declarations for the unified driver architecture
 class IS31FL373x_Device;
@@ -213,6 +213,10 @@ public:
     uint8_t getHeight() const override { return MATRIX_HEIGHT; }
     uint16_t getPWMBufferSize() const override { return PWM_BUFFER_SIZE; }
     uint8_t getRegisterStride() const override { return 16; }  // IS31FL3737 uses 16-byte stride (same as others)
+    
+    // Override coordinate mapping for IS31FL3737 hardware quirk
+    uint16_t coordToIndex(uint8_t x, uint8_t y) const override;
+    void indexToCoord(uint16_t index, uint8_t* x, uint8_t* y) const override;
 
 private:
     uint8_t calculateAddress(ADDR addr);

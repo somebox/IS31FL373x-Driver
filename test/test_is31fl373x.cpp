@@ -580,53 +580,59 @@ TEST_CASE("IS31FL3737: Addressing Fix Verification") {
     IS31FL3737 matrix;
     REQUIRE(matrix.begin() == true);
     
-    SUBCASE("SW0,CS6 addressing issue fix") {
+    SUBCASE("SW0,CS6 addressing issue fix - IS31FL3737 hardware quirk") {
         // This test verifies the fix for the reported issue:
         // "SW0,CS6 LED only lights when addressed as SW0,CS9"
         // 
-        // The fix ensures that drawPixel(6,0) correctly maps to register 0x06
-        // instead of requiring drawPixel(9,0) as a workaround
+        // The IS31FL3737 has a hardware quirk where CS6-CS11 (0-based) map to 
+        // register addresses 8-13, not 6-11. This is due to gaps in the register mapping.
         
         matrix.clear();
         
-        // Draw pixel at coordinate (6,0) - should map to SW0,CS6
+        // Draw pixel at coordinate (6,0) - should map to hardware register 0x08
+        // because CS6 (0-based) = CS7 (1-based) maps to register address 8
         matrix.drawPixel(6, 0, 255);
         
         // Verify it's stored in the correct buffer position
         CHECK(matrix.getPixelValue(6, 0) == 255);
         CHECK(matrix.getNonZeroPixelCount() == 1);
         
-        // Verify coordinate to register mapping
+        // Verify coordinate to register mapping with IS31FL3737 quirk
         uint16_t regAddr = matrix.coordToIndex(6, 0);
-        CHECK(regAddr == 6); // Should map to register 0x06 (SW0,CS6)
+        CHECK(regAddr == 8); // CS6 (0-based) should map to register 0x08, not 0x06
         
-        // Verify that coordinate (9,0) maps to different register
-        uint16_t regAddr9 = matrix.coordToIndex(9, 0);
-        CHECK(regAddr9 == 9); // Should map to register 0x09 (SW0,CS9)
-        CHECK(regAddr != regAddr9); // These should be different
+        // Test the boundary cases
+        CHECK(matrix.coordToIndex(5, 0) == 5);   // CS5 -> register 0x05 (no remapping)
+        CHECK(matrix.coordToIndex(6, 0) == 8);   // CS6 -> register 0x08 (remapped +2)
+        CHECK(matrix.coordToIndex(7, 0) == 9);   // CS7 -> register 0x09 (remapped +2)
+        CHECK(matrix.coordToIndex(11, 0) == 13); // CS11 -> register 0x0D (remapped +2)
+        
+        // Test reverse mapping
+        uint8_t x, y;
+        matrix.indexToCoord(8, &x, &y);  // Register 0x08 should map back to (6,0)
+        CHECK(x == 6);
+        CHECK(y == 0);
     }
     
-    SUBCASE("Register stride mapping for IS31FL3737") {
+    SUBCASE("Register stride mapping for IS31FL3737 with hardware quirk") {
         // IS31FL3737 uses 16-byte register stride despite having only 12 columns
-        // This test verifies the coordinate mapping respects this
+        // AND has a hardware quirk where CS6-CS11 map to register addresses 8-13
         
         matrix.clear();
         
-        // Test first row (SW0) - all 12 columns
-        for (int col = 0; col < 12; col++) {
-            uint16_t regAddr = matrix.coordToIndex(col, 0);
-            CHECK(regAddr == col); // SW0,CS0 -> 0x00, SW0,CS1 -> 0x01, etc.
-        }
+        // Test first row (SW0) with hardware quirk
+        CHECK(matrix.coordToIndex(0, 0) == 0);   // CS0 -> 0x00 (no remapping)
+        CHECK(matrix.coordToIndex(1, 0) == 1);   // CS1 -> 0x01 (no remapping)
+        CHECK(matrix.coordToIndex(5, 0) == 5);   // CS5 -> 0x05 (no remapping)
+        CHECK(matrix.coordToIndex(6, 0) == 8);   // CS6 -> 0x08 (remapped +2)
+        CHECK(matrix.coordToIndex(7, 0) == 9);   // CS7 -> 0x09 (remapped +2)
+        CHECK(matrix.coordToIndex(11, 0) == 13); // CS11 -> 0x0D (remapped +2)
         
-        // Test second row (SW1) - should start at register 0x10 (16 decimal)
-        for (int col = 0; col < 12; col++) {
-            uint16_t regAddr = matrix.coordToIndex(col, 1);
-            CHECK(regAddr == (16 + col)); // SW1,CS0 -> 0x10, SW1,CS1 -> 0x11, etc.
-        }
-        
-        // Test specific case that was problematic
-        CHECK(matrix.coordToIndex(6, 0) == 6);   // SW0,CS6 -> 0x06
-        CHECK(matrix.coordToIndex(6, 1) == 22);  // SW1,CS6 -> 0x16 (22 decimal)
+        // Test second row (SW1) - should start at register 0x10 (16 decimal) + quirk
+        CHECK(matrix.coordToIndex(0, 1) == 16);  // SW1,CS0 -> 0x10
+        CHECK(matrix.coordToIndex(5, 1) == 21);  // SW1,CS5 -> 0x15 (16+5, no remapping)
+        CHECK(matrix.coordToIndex(6, 1) == 24);  // SW1,CS6 -> 0x18 (16+8, remapped +2)
+        CHECK(matrix.coordToIndex(11, 1) == 29); // SW1,CS11 -> 0x1D (16+13, remapped +2)
     }
 }
 

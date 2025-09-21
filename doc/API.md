@@ -168,8 +168,38 @@ Base address `0x50` + `(addr2 << 2) + addr1`
 
 ### IS31FL3737 / IS31FL3737B (1 ADDR pin → 4 addresses)  
 
-Base address `0x50` + `addr`
-- Range: `0x50` to `0x53`
+Base address `0x50` + address bits per IS31FL373x-reference.md:
+- `ADDR::GND` → `0x50` (0000 bits)
+- `ADDR::SCL` → `0x55` (0101 bits)  
+- `ADDR::SDA` → `0x5A` (1010 bits)
+- `ADDR::VCC` → `0x5F` (1111 bits)
+
+**Note:** The ADDR pin connection determines specific bit patterns, not sequential values.
+
+## Hardware-Specific Behavior
+
+### IS31FL3737 Register Mapping Quirk
+
+The IS31FL3737 chip has a hardware quirk in its register mapping that affects columns 6-11 (0-based indexing):
+
+- **Columns 0-5**: Map directly to register addresses 0-5 ✓
+- **Columns 6-11**: Map to register addresses 8-13 (NOT 6-11) ⚠️
+
+This means there's a 2-address gap in the register mapping. The driver automatically handles this remapping:
+
+```cpp
+IS31FL3737 matrix;
+matrix.drawPixel(6, 0, 255);  // User draws at column 6
+// Driver automatically writes to register address 8, not 6
+```
+
+**Why this matters:**
+- Without proper remapping, LEDs would light up in unexpected locations
+- This quirk is unique to the IS31FL3737; the IS31FL3733 and IS31FL3737B do not have this issue
+- The driver handles this transparently - users don't need to worry about it
+
+### IS31FL3733 and IS31FL3737B
+These chips have linear register mapping with no gaps - columns 0-11 map directly to register addresses 0-11.
 
 ## Usage Patterns
 

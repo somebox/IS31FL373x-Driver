@@ -1,38 +1,52 @@
-# Arduino Driver for IS31FL373x LED Matrices
+# IS31FL373x LED Matrix Driver
 
-A performance-focused, multi-chip Arduino driver for the Lumissil **IS31FL3733 (12x16)**, **IS31FL3737 (12x12)**, and **IS31FL3737B (12x12)** LED matrix controllers. This library provides a unified API for all three chips, with robust, model-specific code to prevent hardware conflicts and visual artifacts.
+Arduino driver for Lumissil **IS31FL3733**, **IS31FL3737**, and **IS31FL3737B** LED matrix controllers. Provides unified API with chip-specific optimizations and hardware quirk handling.
 
-## Key Features
+## Features
 
-*   **Chip-Specific Drivers:** Dedicated classes for each chip model correctly handle different memory maps and feature sets, preventing common aliasing issues.
-*   **Multi-Chip Canvas:** Seamlessly manage multiple driver chips as a single, large logical display for scrolling text or graphics.
-*   **Advanced Brightness Control:**
-    *   **Hardware Current:** Sets the maximum brightness via the Global Current Control register.
-    *   **Software Master Brightness:** Easy application-level brightness scaling.
-*   **Adafruit_GFX Integration:** Full compatibility for familiar graphics primitives (text, shapes, bitmaps).
-*   **Buffered Operations:** A frame buffer prevents flickering; drawing operations update a local buffer, then push to hardware atomically with `show()`.
-*   **Custom Layout Support:** An indexed drawing model (`setLayout()`, `setPixel(index)`) for non-matrix arrangements like analog clocks or 14-segment displays.
-*   **State Inspection:** Methods to verify configuration and buffer state for debugging.
+- **Chip-specific drivers** prevent addressing conflicts and visual artifacts
+- **Multi-chip canvas** for large displays with seamless coordinate mapping  
+- **Adafruit_GFX compatible** for familiar graphics primitives
+- **Buffered operations** eliminate flickering with atomic updates
+- **Custom layouts** for non-matrix arrangements (clocks, 7-segment displays)
+- **Hardware + software brightness control** for flexible dimming
 
-## Chip Comparison & Driver Selection
+## Supported Chips
 
-**Important:** These are physically distinct chips. You **must** use the driver class that exactly matches your hardware to ensure correct operation.
+| Chip | Driver Class | Matrix | I2C Addresses | Key Feature |
+|------|--------------|--------|---------------|-------------|
+| **IS31FL3733** | `IS31FL3733` | 12×16 (192 LEDs) | 16 | Largest matrix |
+| **IS31FL3737** | `IS31FL3737` | 12×12 (144 LEDs) | 4 | Hardware quirk handling* |
+| **IS31FL3737B** | `IS31FL3737B` | 12×12 (144 LEDs) | 4 | Selectable PWM frequency |
 
-| Physical Chip | Driver Class | Matrix Size | I2C Address Pins | I2C Addresses | Key Hardware Feature |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| **IS31FL3733** | `IS31FL3733` | 12×16 (192 LEDs) | 2 (`ADDR1`, `ADDR2`) | **16** | Largest matrix |
-| **IS31FL3737** | `IS31FL3737` | 12×12 (144 LEDs) | 1 (`ADDR`) | **4** | Fixed PWM Frequency |
-| **IS31FL3737B**| `IS31FL3737B`| 12×12 (144 LEDs) | 1 (`ADDR`) | **4** | **Selectable PWM Frequency** |
+**Important:** Use the exact driver class for your hardware chip - they are not interchangeable.
 
-### How to Choose the Right Chip for Your Project:
+*IS31FL3737 has register mapping gaps that the driver handles automatically.
 
-1.  **Need maximum LEDs or 16 I2C addresses?** → **IS31FL3733**
-2.  **Building a simple 12x12 matrix and don't need PWM control?** → **IS31FL3737**
-3.  **Need to adjust PWM frequency (e.g., to avoid camera flicker or audible noise)?** → **IS31FL3737B**
+## Quick Start
 
-## API Reference
+```cpp
+#include "IS31FL373x.h"
 
-The full API reference is available in the [IS31FL373x-reference.md](doc/IS31FL373x-reference.md) file.
+IS31FL3737B matrix(ADDR::GND);  // Match your chip!
+
+void setup() {
+  matrix.begin();
+  matrix.setGlobalCurrent(128);
+}
+
+void loop() {
+  matrix.clear();
+  matrix.drawPixel(5, 5, 255);
+  matrix.show();
+  delay(100);
+}
+```
+
+## Documentation
+
+- [Complete API Reference](doc/API.md)
+- [Hardware Reference](doc/IS31FL373x-reference.md)
 
 ## Example Usage
 

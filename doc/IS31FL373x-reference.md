@@ -116,6 +116,38 @@ This page contains the 8-bit (`0x00`-`0xFF`) brightness value for each LED.
 
 ---
 
+### IS31FL3737 Hardware Quirk: Register Mapping Gaps
+
+**NOTE:** The IS31FL3737 chip has a quirk in its register mapping that affects columns CS7-CS12 (1-based) or CS6-CS11 (0-based):
+
+- **Columns CS1-CS6**: Map directly to register addresses 0-5 ✓
+- **Columns CS7-CS12**: Map to register addresses 8-13 (NOT 6-11) ⚠️
+
+This creates a 2-address gap in the register mapping. The IS31FL3737 skips register addresses 6-7 and 14-15 in each row.
+
+#### Example Register Mapping for IS31FL3737:
+```
+Row SW1 (0-based row 0):
+CS1 -> 0x00, CS2 -> 0x01, ..., CS6 -> 0x05
+CS7 -> 0x08, CS8 -> 0x09, ..., CS12 -> 0x0D
+(Addresses 0x06, 0x07, 0x0E, 0x0F are skipped)
+
+Row SW2 (0-based row 1):  
+CS1 -> 0x10, CS2 -> 0x11, ..., CS6 -> 0x15
+CS7 -> 0x18, CS8 -> 0x19, ..., CS12 -> 0x1D
+(Addresses 0x16, 0x17, 0x1E, 0x1F are skipped)
+```
+
+#### Impact on Driver Implementation:
+- Without this remapping, LEDs would light up in unexpected locations
+- Users would need to call `drawPixel(9, 0)` to light the LED at CS7, SW1
+- **This quirk is unique to IS31FL3737** - the IS31FL3733 (and perhaps IS31FL3737B) do not have this issue
+
+#### Driver Solution:
+The IS31FL373x driver automatically handles this quirk in the `IS31FL3737` class by overriding the `coordToIndex()` method to apply the +2 offset for columns 6-11.
+
+---
+
 ### Page 0: LED Control Registers
 
 * **LED On/Off Registers**: Each bit enables (`1`) or disables (`0`) an individual LED. An LED's PWM value is only output if its corresponding bit is `1`.
