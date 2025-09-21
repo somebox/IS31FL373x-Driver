@@ -103,10 +103,23 @@ void IS31FL373x_Device::show() {
     // Switch to PWM page
     selectPage(IS31FL373X_PAGE_PWM);
     
-    // Write entire PWM buffer to device
-    // IS31FL3737B has 144 PWM registers (12x12 matrix)
-    for (uint16_t i = 0; i < getPWMBufferSize(); i++) {
-        writeRegister(i, _pwmBuffer[i]);
+    // Write PWM buffer to device, respecting chip's register layout
+    // IS31FL3737B: Only write to valid register addresses (skip CS13-16 gaps)
+    // IS31FL3733: Write to all 16 columns per row
+    
+    uint8_t width = getWidth();
+    uint8_t height = getHeight();
+    uint8_t stride = getRegisterStride();
+    
+    for (uint8_t row = 0; row < height; row++) {
+        for (uint8_t col = 0; col < width; col++) {
+            uint16_t bufferIndex = row * width + col;  // Linear buffer index
+            uint16_t regAddress = row * stride + col;   // Hardware register address
+            
+            if (bufferIndex < getPWMBufferSize()) {
+                writeRegister(regAddress, _pwmBuffer[bufferIndex]);
+            }
+        }
     }
 }
 
@@ -128,16 +141,24 @@ void IS31FL373x_Device::setMasterBrightness(uint8_t brightness) {
 }
 
 void IS31FL373x_Device::drawPixel(int16_t x, int16_t y, uint16_t color) {
-    // Basic bounds checking
+    // Strict bounds checking to prevent writes to non-existent hardware addresses
     if (x < 0 || y < 0 || x >= getWidth() || y >= getHeight()) {
         return;
     }
     
-    uint16_t index = coordToIndex(x, y);
-    if (index < getPWMBufferSize() && _pwmBuffer != nullptr) {
+    // For IS31FL3737B: Additional check to ensure we don't write to CS13-16 (non-existent columns)
+    // The getWidth() should already handle this, but double-check for safety
+    if (x >= getWidth()) {
+        return;
+    }
+    
+    // Calculate buffer index (linear) - this is different from register address
+    uint16_t bufferIndex = y * getWidth() + x;
+    
+    if (bufferIndex < getPWMBufferSize() && _pwmBuffer != nullptr) {
         // Apply master brightness scaling
         uint8_t scaledColor = (color * _masterBrightness) / 255;
-        _pwmBuffer[index] = scaledColor;
+        _pwmBuffer[bufferIndex] = scaledColor;
     }
 }
 
@@ -195,15 +216,16 @@ uint16_t IS31FL373x_Device::coordToIndex(uint8_t x, uint8_t y) const {
     uint8_t cs = x + _csOffset + 1;  // Convert to 1-based CS (CSx)
     uint8_t sw = y + _swOffset + 1;  // Convert to 1-based SW (SWy)
     
-    // Use hardware register mapping formula: Address = (SWy - 1) * 16 + (CSx - 1)
-    // This matches the IS31FL373x register layout exactly
-    return static_cast<uint16_t>((sw - 1) * 16 + (cs - 1));
+    // Use chip-specific register mapping formula: Address = (SWy - 1) * stride + (CSx - 1)
+    // IS31FL3733: stride = 16, IS31FL3737B: stride = 16 (sparse layout with gaps)
+    return static_cast<uint16_t>((sw - 1) * getRegisterStride() + (cs - 1));
 }
 
 void IS31FL373x_Device::indexToCoord(uint16_t index, uint8_t* x, uint8_t* y) const {
-    // Reverse the hardware register mapping: Address = (SWy - 1) * 16 + (CSx - 1)
-    uint8_t cs = (index % 16) + 1;  // Extract CS (1-based)
-    uint8_t sw = (index / 16) + 1;  // Extract SW (1-based)
+    // Reverse the hardware register mapping: Address = (SWy - 1) * stride + (CSx - 1)
+    uint8_t stride = getRegisterStride();
+    uint8_t cs = (index % stride) + 1;  // Extract CS (1-based)
+    uint8_t sw = (index / stride) + 1;  // Extract SW (1-based)
     
     // Convert back to 0-based coordinates and apply offsets
     if (x != nullptr) *x = cs - 1 - _csOffset;

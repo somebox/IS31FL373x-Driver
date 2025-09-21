@@ -1,163 +1,158 @@
-# **Programmer's Guide: IS31FL3733 & IS31FL3737B Matrix Drivers**
+# Developer's Guide to the IS31FL37xx LED Driver Family
 
-This guide provides a software-centric reference for controlling the IS31FL3733 (12x16) and IS31FL3737B (12x12) LED matrix drivers via the I2C protocol.
+This guide provides a comprehensive software development reference for the Lumissil IS31FL3733, IS31FL3737, and IS31FL3737B I2C matrix LED drivers. It focuses on the key differences, control flow, and best practices for writing a robust and adaptable driver.
 
-## **1.0 I2C Communication Protocol**
+## 1. Key Differences & Chip Identification
 
-The primary interface for control is a 1MHz I2C-compatible bus. All operations, from initialization to setting individual LED brightness, are performed through register writes and reads.
+While sharing a core architecture, these chips have critical differences that a driver must handle.
 
-**1.1. Slave Address**
+#### 1.1. At a Glance Comparison
 
-The I2C slave address is 7 bits long. The final address is determined by the hardware connection of the ADDR pin(s).
+| Feature | IS31FL3733 | IS31FL3737 | IS31FL3737B |
+| :--- | :--- | :--- | :--- |
+| **Matrix Size** | **12×16** | 12×12 | 12×12 |
+| **Max LEDs** | 192 (64 RGB) | 144 (48 RGB) | 144 (48 RGB) |
+| **Package(s)** | QFN-48, eTQFP-48 | QFN-40 | QFN-40 |
+| **I2C Address Pins** | **ADDR1, ADDR2** (16 addr) | **ADDR** (4 addr) | **ADDR** (4 addr) |
+| **PWM Frequency** | Fixed (~7.8 kHz) | Fixed (~7.8 kHz) | **Selectable (1.05 - 26.7 kHz)** |
 
-* **IS31FL3733 (Two ADDR Pins):**
-  * Fixed bits: `101` (A7:A5)
-  * Address is `101` + `A4 A3` (ADDR2 pin) + `A2 A1` (ADDR1 pin).
-  * This allows for up to 16 unique addresses on a single bus.
-  * **Example:** ADDR1=GND, ADDR2=GND -> A4:A1 = `0000`. Slave Address = `0b1010000` = **`0x50`**.
+#### 1.2. Programmatic Chip Identification
 
-* **IS31FL3737B (One ADDR Pin):**
-  * Fixed bits: `101` (A7:A5)
-  * Address is `101` + `A4 A3 A2 A1` (ADDR pin).
-  * This allows for 4 unique addresses on a single bus.
-  * **Example:** ADDR=GND -> A4:A1 = `0000`. Slave Address = `0b1010000` = **`0x50`**.
+> **CRITICAL:** None of these devices contain a "Device ID" register. It is **not possible** to programmatically query the chip to determine its model. The driver **must** be configured at compile-time or initialization with the specific model it is controlling.
 
-**1.2. Fundamental Control Registers**
+A recommended driver design pattern:
 
-Two special registers, located outside the main paged memory, govern access to all other registers.
+```c
+typedef enum {
+    MODEL_IS31FL3733,
+    MODEL_IS31FL3737,
+    MODEL_IS31FL3737B
+} is31fl37xx_model_t;
 
-* **Command Register Write Lock (`0xFE`):** This register protects the Command Register from accidental writes.
-  * `0xC5`: Unlocks the Command Register for a **single** write operation.
-  * After writing to the Command Register, this register automatically resets to `0x00` (locked).
-* **Command Register (`0xFD`):** This register acts as a page selector. Writing a value to this register determines which of the four memory pages is currently accessible.
-  * `0x00`: Selects Page 0 (LED Control).
-  * `0x01`: Selects Page 1 (PWM).
-  * `0x02`: Selects Page 2 (Auto Breath Mode).
-  * `0x03`: Selects Page 3 (Function).
+// Driver instance must store the model
+struct is31fl37xx_dev {
+    is31fl37xx_model_t model;
+    // ... other device properties
+};
+```
 
-**A standard I2C write sequence to any paged register is:**
-1. START
-2. Slave Address + W
-3. Write Register Address `0xFE`
-4. Write Data `0xC5` (Unlock)
-5. STOP
-6. START
-7. Slave Address + W
-8. Write Register Address `0xFD`
-9. Write Data `0x00` - `0x03` (Select Page)
-10. STOP
-11. START
-12. Slave Address + W
-13. Write Register Address within the selected page (e.g., `0x24` for a PWM value).
-14. Write Data.
-15. STOP
+## 2. I2C Communication & Control Flow
+
+### 2.1. Slave Addressing
+
+The 7-bit I2C slave address consists of a fixed 3-bit prefix (`0b101`) and a 4-bit suffix set by hardware pin connections.
+
+* **IS31FL3733 (Two Address Pins):**
+  * Address: `0b101` | `A4:A3 (ADDR2)` | `A2:A1 (ADDR1)`
+  * Provides 16 unique addresses.
+
+    | ADDRx Pin Tied To | Bit Value |
+    | :--- | :--- |
+    | GND | `00` |
+    | SCL | `01` |
+    | SDA | `10` |
+    | VCC | `11` |
+
+* **IS31FL3737 & IS31FL3737B (Single Address Pin):**
+  * Address: `0b101` | `A4:A1 (ADDR)`
+  * Provides 4 unique addresses.
+
+    | ADDR Pin Tied To | Bit Value (A4:A1) |
+    | :--- | :--- |
+    | GND | `0000` |
+    | SCL | `0101` |
+    | SDA | `1010` |
+    | VCC | `1111` |
+
+### 2.2. Core Control Flow: The Page System
+
+All primary registers are organized into four memory pages. Accessing any paged register requires a three-step logical sequence: **Unlock → Select Page → Access Register**.
+
+1. **Unlock:** Write `0xC5` to the **Command Register Write Lock (`0xFE`)**. This allows a *single* subsequent write to the Command Register.
+2. **Select Page:** Write the desired page number (`0x00`-`0x03`) to the **Command Register (`0xFD`)**.
+3. **Access Register:** Perform standard I2C read/write operations on registers within the now-active page.
+
+This sequence is required for every page switch. Multiple accesses within the same page do not require repeating the sequence.
+
+## 3. Register Map Deep Dive
+
+### Page 3: Function Registers
+
+This page contains global configuration and must be configured on initialization.
+
+* **Configuration Register (`0x00`)**
+| Bit(s) | Name | Function & Key Differences |
+| :--- | :--- | :--- |
+| `D7:D6` | **SYNC** | Multi-chip sync: `01`=Master, `10`=Slave, `00/11`=Off. |
+| `D5:D3` | **PFS** | **IS31FL3737B ONLY:** PWM Frequency Select. Reserved on other models. `000`=8.4kHz (Default), `010`=26.7kHz. |
+| `D2` | **OSD** | Write `1` to trigger one-shot Open/Short Detection. |
+| `D1` | **B_EN** | `1` enables the Auto Breath Mode engine. |
+| `D0` | **SSD** | `0`=Software Shutdown, `1`=Normal Operation. **Default is `0` (Shutdown)**. |
+
+* **Global Current Control (GCC) Register (`0x01`)**: An 8-bit value (`0x00`-`0xFF`) setting the max current for all channels. Controls overall brightness.
+* **Auto Breath (ABM) Timing Registers (`0x02` - `0x0D`)**: Defines timing for the three ABM profiles.
+* **Time Update Register (`0x0E`)**: Writing `0x00` to this register latches new ABM timing values. **This is mandatory after updating ABM timing.**
+* **Reset Register (`0x11`, Read-Only)**: Reading from this address resets all device registers to their power-on defaults.
+
+### Page 1: PWM Registers
+
+This page contains the 8-bit (`0x00`-`0xFF`) brightness value for each LED.
+
+| Model | Address Range | Size |
+| :--- | :--- | :--- |
+| IS31FL3733 | `0x00` - `0xBF` | 192 bytes |
+| IS31FL3737 / B | `0x00` - `0x8F` | 144 bytes |
+
+---
+> **WARNING: Critical Note on Address Mapping for 12x12 Models**
+>
+> The register map uses a fixed row stride of 16 bytes, regardless of the physical matrix size. The address for an LED at `(CSx, SWy)` is `(SWy-1) * 16 + (CSx-1)`.
+>
+> On the **IS31FL3737 and IS31FL3737B**, which only have 12 columns (CS1-CS12), the register addresses for columns 13-16 in each row (e.g., `0x0C` to `0x0F` for SW1) are physically non-existent.
+>
+> Attempting to write to these invalid addresses (e.g., via a 16-byte burst write intended for an IS31FL3733) will corrupt the chip's internal address pointer, causing subsequent data to be written to incorrect locations. This manifests as visual artifacts where controlling one LED unexpectedly affects another.
+>
+> **Your driver MUST limit all writes to valid column ranges (CS1-CS12) for the 12x12 models.**
 
 ---
 
-## **2.0 Core Concepts and Register Map**
+### Page 0: LED Control Registers
 
-The device memory is organized into four distinct pages. A programmer must select the correct page before accessing its registers.
+* **LED On/Off Registers**: Each bit enables (`1`) or disables (`0`) an individual LED. An LED's PWM value is only output if its corresponding bit is `1`.
+  * **IS31FL3733**: `0x00` - `0x17` (24 bytes)
+  * **IS31FL3737 / B**: `0x00` - `0x11` (18 bytes)
+* **LED Open/Short Registers (`0x18`-`0x47`)**: Read-only fault status registers populated after an OSD cycle. Address ranges differ by model similar to On/Off registers.
 
-**2.1. Page 3: Function Registers (Address `0x03`)**
+### Page 2: Auto Breath Mode (ABM) Assignment
 
-This page contains all global configuration and control registers. It should be configured first during initialization.
+This page assigns an operating mode to each LED. The address range and mapping mirrors the PWM registers.
 
-* **Configuration Register (`0x00`):**
-  * `D7:D6` **SYNC**: Configures multi-chip synchronization. `01`=Master, `10`=Slave, `00/11`=Disabled.
-  * `D5:D3` **PFS** (IS31FL3737B only): Selects PWM frequency (Default `000`=8.4kHz).
-  * `D2` **OSD**: Open/Short Detection. Write `1` to trigger a one-shot detection cycle.
-  * `D1` **B_EN**: Auto Breath Mode Enable. `1` enables the ABM engine for assigned LEDs.
-  * `D0` **SSD**: Software Shutdown. `0`=Shutdown, `1`=Normal Operation (Default).
+* `D1:D0` **ABMS**:
+  * `00`: Normal PWM Mode (controlled by Page 1).
+  * `01`: Auto Breath Mode 1.
+  * `10`: Auto Breath Mode 2.
+  * `11`: Auto Breath Mode 3.
 
-* **Global Current Control Register (`0x01`):**
-  * `D7:D0` **GCC**: A 256-step value (`0x00`-`0xFF`) that sets the maximum output current for all CS pins, in conjunction with the external resistor. This controls the overall display brightness.
+## 4. Common Operational Procedures
 
-* **Auto Breath Control Registers (`0x02` - `0x0D`):**
-  * These 12 registers define the timing parameters for the three independent Auto Breath Modes (ABM-1, ABM-2, ABM-3).
-  * Each ABM has registers for rise time (T1), hold time (T2), fall time (T3), off time (T4), and loop control.
+### 4.1. Initialization Sequence
 
-* **Time Update Register (`0x0E`):**
-  * Writing `0x00` to this register latches any new values written to the ABM timing registers (`0x02`-`0x0D`) into the ABM engine. This must be done after updating ABM parameters.
+1. **Reset Chip:** Perform a read from the **Reset Register** (`0x11` in Page 3) to ensure a known default state.
+2. **Enable Operation:** Select **Page 3** and write to the **Configuration Register (`0x00`)**, setting `SSD` (D0) to `1`. Configure `SYNC` and `PFS` (IS31FL3737B only) as needed.
+3. **Set Global Brightness:** In **Page 3**, write a desired value to the **Global Current Control Register (`0x01`)**.
+4. **Enable All LEDs:** Select **Page 0** and write `0xFF` to all **LED On/Off registers** to enable all pixels.
+5. **Clear Display:** Select **Page 1** and write `0x00` to all **PWM registers** to ensure the display starts blank.
 
-* **Reset Register (`0x11`, Read-Only):**
-  * Reading from this register resets all registers on the device to their power-on default values.
+### 4.2. Updating the Display
 
-**2.2. Page 1: PWM Registers (Address `0x01`)**
+1. Select **Page 1** (PWM).
+2. To update a single pixel, write its 8-bit PWM value to the calculated register address.
+3. To update a full frame efficiently, use I2C burst writes with auto-increment, sending the entire PWM frame buffer. **Ensure the correct number of bytes are sent per row (16 for IS31FL3733, 12 for others).**
 
-This page contains the 8-bit brightness value for every individual LED.
+### 4.3. Performing Open/Short Detection
 
-* **Address Range:**
-  * IS31FL3733: `0x00` - `0xBF` (192 bytes)
-  * IS31FL3737B: `0x00` - `0x8F` (144 bytes)
-* **Function:** Each byte (`0x00`-`0xFF`) corresponds to one LED and sets its PWM duty cycle (0-255 steps).
-* **Mapping (CSx, SWy) to Register Address:**
-  * `Address = (SWy - 1) * 16 + (CSx - 1)`
-  * **Example (IS31FL3733):** The LED at `CS5`, `SW3` is controlled by PWM register at address `(3 - 1) * 16 + (5 - 1) = 2 * 16 + 4 = 36 = 0x24`.
-
-**2.3. Page 0: LED Control Registers (Address `0x00`)**
-
-This page controls the on/off state and stores the open/short fault status for each LED.
-
-* **LED On/Off Registers (`0x00` - `0x17`):**
-  * **Function:** These are write-only registers. Each bit corresponds to one LED. `1`=On, `0`=Off. An LED must be in the 'On' state for its PWM value to be displayed.
-  * **Mapping:** The mapping is bitwise. E.g., for SW1, register `0x00` controls CS1-CS8 and `0x01` controls CS9-CS16.
-
-* **LED Open Registers (`0x18` - `0x2F`):**
-  * **Function:** Read-only registers. After an open/short detection cycle, a `1` in a bit position indicates that the corresponding LED is detected as an open circuit.
-
-* **LED Short Registers (`0x30` - `0x47`):**
-  * **Function:** Read-only registers. A `1` indicates a short circuit.
-
-**2.4. Page 2: Auto Breath Mode Registers (Address `0x02`)**
-
-This page is used to assign an operating mode to each individual LED.
-
-* **Address Range:** Same as PWM registers (`0x00-0xBF` or `0x00-0x8F`).
-* **Function:** Each byte in this page controls one LED. The lower two bits determine its behavior.
-  * `D1:D0` **ABMS**:
-    * `00`: PWM control mode (uses value from Page 1).
-    * `01`: Auto Breath Mode 1 (ABM-1).
-    * `10`: Auto Breath Mode 2 (ABM-2).
-    * `11`: Auto Breath Mode 3 (ABM-3).
-
----
-
-## **3.0 Key Operational Procedures**
-
-**3.1. Initialization Sequence**
-1. Power on the device.
-2. Send an I2C command to read the **Reset Register** (`0x11` on Page 3) to ensure a known state.
-3. Select **Page 3** (Function).
-4. Write `0x01` to the **Configuration Register** (`0x00`). This sets `SSD=1` to enable normal operation. (Modify other bits like SYNC or PFS as needed).
-5. Write a value (e.g., `0x80`) to the **Global Current Control Register** (`0x01`) to set overall brightness.
-6. Select **Page 0** (LED Control).
-7. Write `0xFF` to all **LED On/Off registers** (`0x00`-`0x17`) to enable all LEDs.
-8. Select **Page 1** (PWM).
-9. Write `0x00` to all **PWM registers** to turn all LEDs off initially. The device is now ready.
-
-**3.2. Setting Individual LED Brightness**
-1. Ensure the device is initialized and in normal operation.
-2. Select **Page 1** (PWM).
-3. Calculate the register address for the target LED at `(CSx, SWy)`.
-4. Write the desired 8-bit PWM value (`0x00`-`0xFF`) to that address.
-
-**3.3. Using Auto-Breath Mode (ABM)**
-1. Select **Page 3** (Function).
-2. Configure the timing parameters for the desired ABM (e.g., ABM-1) by writing to registers `0x02`-`0x05`.
-3. Write `0x00` to the **Time Update Register** (`0x0E`) to apply the new timing.
-4. Select **Page 2** (Auto Breath Mode).
-5. For each LED you want to use this effect on, write the appropriate mode value (`0x01` for ABM-1) to its register in this page.
-6. Select **Page 3** (Function).
-7. Read the **Configuration Register** (`0x00`), set the `B_EN` bit (D1) to `1`, and write the value back. The breathing effect will now start.
-
-**3.4. Performing Open/Short Detection**
-1. Ensure all LEDs to be tested are enabled via the On/Off registers (Page 0) and have a non-zero PWM value (Page 1).
-2. Select **Page 3** (Function).
-3. Set the **Global Current Control** (`0x01`) to a low value (e.g., `0x01`) to ensure a valid test current.
-4. Read the **Configuration Register** (`0x00`), set the `OSD` bit (D2) to `1`, and write it back. This starts the detection.
-5. Wait at least two full scan cycles (~3.3ms for IS31FL3733).
-6. Select **Page 0** (LED Control).
-7. Read the **LED Open Registers** (`0x18`-`0x2F`) and **LED Short Registers** (`0x30`-`0x47`) to get the fault status for each LED.
-
----
-
+1. Ensure LEDs under test are enabled (Page 0 On/Off) with a non-zero PWM value (Page 1).
+2. Select **Page 3**. Set **GCC (`0x01`)** to a low value (e.g., `0x01`) for the test.
+3. Read the **Configuration Register (`0x00`)**, set the `OSD` bit (D2) to `1`, and write it back.
+4. Wait >3.3ms for the detection cycle to complete.
+5. Select **Page 0**. Read the **LED Open** and **LED Short** registers to find faulty LEDs.

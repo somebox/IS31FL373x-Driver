@@ -88,6 +88,7 @@ public:
     virtual uint8_t getWidth() const = 0;
     virtual uint8_t getHeight() const = 0;
     virtual uint16_t getPWMBufferSize() const = 0;
+    virtual uint8_t getRegisterStride() const = 0;  // 16 for IS31FL3733, 12 for IS31FL3737B
     
     // Display control
     virtual void show();
@@ -151,6 +152,7 @@ public:
     uint8_t getWidth() const override { return MATRIX_WIDTH; }
     uint8_t getHeight() const override { return MATRIX_HEIGHT; }
     uint16_t getPWMBufferSize() const override { return PWM_BUFFER_SIZE; }
+    uint8_t getRegisterStride() const override { return 16; }  // IS31FL3733 uses 16-byte stride
 
 private:
     uint8_t calculateAddress(uint8_t addr1, uint8_t addr2);
@@ -170,6 +172,7 @@ public:
     uint8_t getWidth() const override { return MATRIX_WIDTH; }
     uint8_t getHeight() const override { return MATRIX_HEIGHT; }
     uint16_t getPWMBufferSize() const override { return PWM_BUFFER_SIZE; }
+    uint8_t getRegisterStride() const override { return 16; }  // IS31FL3737B still uses 16-byte stride in registers
     
     // 3737B-specific features
     void setPWMFrequency(uint8_t freq);
