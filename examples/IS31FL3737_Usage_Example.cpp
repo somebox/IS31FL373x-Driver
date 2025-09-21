@@ -21,7 +21,8 @@ void setup() {
     Serial.begin(115200);
     Serial.println("IS31FL3737 Hardware Example");
     
-    // Initialize the driver
+    // IMPORTANT: Call begin() in setup(), not during static initialization
+    // This ensures Wire is properly initialized before creating I2C devices
     if (!ledMatrix.begin()) {
         Serial.println("Failed to initialize LED matrix!");
         while (1);

@@ -113,6 +113,10 @@ protected:
     uint8_t _globalCurrent;
     uint8_t _masterBrightness;
     
+    // I2C parameters (stored for delayed initialization)
+    uint8_t _addr;
+    TwoWire* _wire;
+    
     // Layout mapping
     PixelMapEntry* _customLayout;
     uint16_t _layoutSize;

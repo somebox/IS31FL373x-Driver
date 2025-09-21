@@ -17,10 +17,12 @@ void delay(unsigned long ms) {
 // Full implementation will be added incrementally
 
 IS31FL373x_Device::IS31FL373x_Device(uint8_t addr, TwoWire *wire) 
-    : Adafruit_GFX(0, 0), _i2c_dev(nullptr), _pwmBuffer(nullptr),
-      _globalCurrent(128), _masterBrightness(255), _customLayout(nullptr),
-      _layoutSize(0), _useCustomLayout(false), _csOffset(0), _swOffset(0) {
-    _i2c_dev = new Adafruit_I2CDevice(addr, wire);
+    : Adafruit_GFX(12, 12), _i2c_dev(nullptr), _pwmBuffer(nullptr),
+      _globalCurrent(128), _masterBrightness(255), _addr(addr), _wire(wire),
+      _customLayout(nullptr), _layoutSize(0), _useCustomLayout(false), 
+      _csOffset(0), _swOffset(0) {
+    // Store parameters for delayed initialization in begin()
+    // DON'T create Adafruit_I2CDevice here to avoid static initialization issues
 }
 
 IS31FL373x_Device::~IS31FL373x_Device() {
@@ -39,6 +41,19 @@ IS31FL373x_Device::~IS31FL373x_Device() {
 }
 
 bool IS31FL373x_Device::begin() {
+    // Create I2C device here when Wire is properly initialized
+    if (_i2c_dev == nullptr) {
+        _i2c_dev = new Adafruit_I2CDevice(_addr, _wire);
+        if (_i2c_dev == nullptr) {
+            return false;
+        }
+    }
+    
+    // Initialize I2C device
+    if (!_i2c_dev->begin()) {
+        return false;
+    }
+    
     // Allocate PWM buffer
     if (_pwmBuffer == nullptr) {
 #ifdef UNIT_TEST
@@ -50,11 +65,6 @@ bool IS31FL373x_Device::begin() {
             return false;
         }
         memset(_pwmBuffer, 0, getPWMBufferSize());
-    }
-    
-    // Initialize I2C device
-    if (!_i2c_dev->begin()) {
-        return false;
     }
     
     // Software reset
