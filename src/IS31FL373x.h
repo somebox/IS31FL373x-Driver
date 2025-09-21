@@ -20,12 +20,25 @@ public:
 protected:
     int16_t _width, _height;
 };
+
+class Adafruit_I2CDevice {
+public:
+    Adafruit_I2CDevice(uint8_t addr, TwoWire* wire = nullptr) : _addr(addr), _wire(wire) {}
+    virtual ~Adafruit_I2CDevice() = default;
+    bool begin() { return true; }
+    bool write(uint8_t* buffer, size_t len) { return true; }
+    bool read(uint8_t* buffer, size_t len) { return true; }
+private:
+    uint8_t _addr;
+    TwoWire* _wire;
+};
 #else
 // Real Arduino includes
 #include <Arduino.h>
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_BusIO_Register.h>
+#include <Adafruit_I2CDevice.h>
 #endif
 
 // Forward declarations for the unified driver architecture
@@ -65,7 +78,7 @@ enum CanvasLayout {
 class IS31FL373x_Device : public Adafruit_GFX {
 public:
     IS31FL373x_Device(uint8_t addr = 0x50, TwoWire *wire = &Wire);
-    virtual ~IS31FL373x_Device() = default;
+    virtual ~IS31FL373x_Device();
 
     // Initialization
     virtual bool begin();
@@ -92,8 +105,7 @@ public:
     void setLayout(const PixelMapEntry* layout, uint16_t layoutSize);
 
 protected:
-    TwoWire* _wire;
-    uint8_t _addr;
+    Adafruit_I2CDevice* _i2c_dev;
     uint8_t* _pwmBuffer;
     uint8_t _globalCurrent;
     uint8_t _masterBrightness;

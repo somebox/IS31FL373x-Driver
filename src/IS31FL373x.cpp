@@ -5,20 +5,41 @@
 #include <cstring>
 // Mock Wire instance for testing
 TwoWire Wire;
+// Mock delay function for testing
+void delay(unsigned long ms) {
+    // No-op in unit tests
+}
+#else
+#include <Arduino.h>  // for delay() function
 #endif
 
 // Stub implementations for basic compilation testing
 // Full implementation will be added incrementally
 
 IS31FL373x_Device::IS31FL373x_Device(uint8_t addr, TwoWire *wire) 
-    : Adafruit_GFX(0, 0), _wire(wire), _addr(addr), _pwmBuffer(nullptr),
+    : Adafruit_GFX(0, 0), _i2c_dev(nullptr), _pwmBuffer(nullptr),
       _globalCurrent(128), _masterBrightness(255), _customLayout(nullptr),
       _layoutSize(0), _useCustomLayout(false) {
+    _i2c_dev = new Adafruit_I2CDevice(addr, wire);
+}
+
+IS31FL373x_Device::~IS31FL373x_Device() {
+    if (_i2c_dev) {
+        delete _i2c_dev;
+        _i2c_dev = nullptr;
+    }
+    if (_pwmBuffer) {
+#ifdef UNIT_TEST
+        std::free(_pwmBuffer);
+#else
+        delete[] _pwmBuffer;
+#endif
+        _pwmBuffer = nullptr;
+    }
 }
 
 bool IS31FL373x_Device::begin() {
-    // TODO: Implement initialization sequence
-    // For now, just allocate the PWM buffer
+    // Allocate PWM buffer
     if (_pwmBuffer == nullptr) {
 #ifdef UNIT_TEST
         _pwmBuffer = static_cast<uint8_t*>(std::malloc(getPWMBufferSize()));
@@ -30,15 +51,49 @@ bool IS31FL373x_Device::begin() {
         }
         memset(_pwmBuffer, 0, getPWMBufferSize());
     }
+    
+    // Initialize I2C device
+    if (!_i2c_dev->begin()) {
+        return false;
+    }
+    
+    // Software reset
+    reset();
+    
+    // Enable all LEDs (LED Control Page)
+    selectPage(IS31FL373X_PAGE_LED_CTRL);
+    for (uint16_t i = 0; i < getPWMBufferSize(); i++) {
+        writeRegister(i, 0xFF); // Enable all LEDs
+    }
+    
+    // Set global current control
+    selectPage(IS31FL373X_PAGE_FUNCTION);
+    writeRegister(0x01, _globalCurrent); // Global Current Control
+    
+    // Switch to PWM page for normal operation
+    selectPage(IS31FL373X_PAGE_PWM);
+    
     return true;
 }
 
 void IS31FL373x_Device::reset() {
-    // TODO: Implement reset sequence
+    // Software reset by writing to reset register
+    selectPage(IS31FL373X_PAGE_FUNCTION);
+    writeRegister(0x11, 0xAE); // Software reset command
+    delay(10); // Wait for reset to complete
 }
 
 void IS31FL373x_Device::show() {
-    // TODO: Implement buffer transfer to device
+    if (_pwmBuffer == nullptr) return;
+    
+    // Switch to PWM page
+    selectPage(IS31FL373X_PAGE_PWM);
+    
+    // Write entire PWM buffer to device
+    // IS31FL3737B has 144 PWM registers (12x12 matrix)
+    for (uint16_t i = 0; i < getPWMBufferSize(); i++) {
+        writeRegister(i, _pwmBuffer[i]);
+    }
 }
 
 void IS31FL373x_Device::clear() {
@@ -49,7 +104,9 @@ void IS31FL373x_Device::clear() {
 
 void IS31FL373x_Device::setGlobalCurrent(uint8_t current) {
     _globalCurrent = current;
-    // TODO: Write to device register
+    // Write to Global Current Control register on Function page
+    selectPage(IS31FL373X_PAGE_FUNCTION);
+    writeRegister(0x01, current);
 }
 
 void IS31FL373x_Device::setMasterBrightness(uint8_t brightness) {
@@ -86,13 +143,22 @@ void IS31FL373x_Device::setLayout(const PixelMapEntry* layout, uint16_t layoutSi
 }
 
 bool IS31FL373x_Device::selectPage(uint8_t page) {
-    // TODO: Implement page selection I2C sequence
-    return true;
+    uint8_t buffer[2];
+    
+    // Unlock command register
+    buffer[0] = IS31FL373X_REG_UNLOCK;
+    buffer[1] = IS31FL373X_UNLOCK_VALUE;
+    if (!_i2c_dev->write(buffer, 2)) return false;
+    
+    // Select page
+    buffer[0] = IS31FL373X_REG_COMMAND;
+    buffer[1] = page;
+    return _i2c_dev->write(buffer, 2);
 }
 
 bool IS31FL373x_Device::writeRegister(uint8_t reg, uint8_t value) {
-    // TODO: Implement register write
-    return true;
+    uint8_t buffer[2] = {reg, value};
+    return _i2c_dev->write(buffer, 2);
 }
 
 bool IS31FL373x_Device::readRegister(uint8_t reg, uint8_t* value) {
