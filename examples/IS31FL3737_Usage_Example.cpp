@@ -25,8 +25,11 @@ void setup() {
     // This ensures Wire is properly initialized before creating I2C devices
     if (!ledMatrix.begin()) {
         Serial.println("Failed to initialize LED matrix!");
+        Serial.println("Check I2C connections and address!");
         while (1);
     }
+    
+    Serial.println("LED matrix initialized successfully!");
     
     // CRITICAL: Set coordinate offset for IS31FL3737 hardware compatibility
     // This maps user coordinates (0-based) to hardware registers (1-based)

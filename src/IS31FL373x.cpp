@@ -72,12 +72,15 @@ bool IS31FL373x_Device::begin() {
     
     // Enable all LEDs (LED Control Page)
     selectPage(IS31FL373X_PAGE_LED_CTRL);
-    for (uint16_t i = 0; i < getPWMBufferSize(); i++) {
-        writeRegister(i, 0xFF); // Enable all LEDs
+    // LED Control registers are 0x00-0x17 (24 registers total)
+    // Each register controls 8 LEDs with bitwise mapping
+    for (uint8_t i = 0x00; i <= 0x17; i++) {
+        writeRegister(i, 0xFF); // Enable all LEDs in this register
     }
     
-    // Set global current control
+    // Configure Function Page
     selectPage(IS31FL373X_PAGE_FUNCTION);
+    writeRegister(0x00, 0x01); // Configuration Register: SSD=1 (Normal Operation)
     writeRegister(0x01, _globalCurrent); // Global Current Control
     
     // Switch to PWM page for normal operation
@@ -87,9 +90,10 @@ bool IS31FL373x_Device::begin() {
 }
 
 void IS31FL373x_Device::reset() {
-    // Software reset by writing to reset register
+    // Software reset by reading from reset register
     selectPage(IS31FL373X_PAGE_FUNCTION);
-    writeRegister(0x11, 0xAE); // Software reset command
+    uint8_t dummy;
+    readRegister(0x11, &dummy); // Software reset by reading register 0x11
     delay(10); // Wait for reset to complete
 }
 
@@ -177,8 +181,13 @@ bool IS31FL373x_Device::writeRegister(uint8_t reg, uint8_t value) {
 }
 
 bool IS31FL373x_Device::readRegister(uint8_t reg, uint8_t* value) {
-    // TODO: Implement register read
-    return true;
+    if (value == nullptr) return false;
+    
+    // Write register address
+    if (!_i2c_dev->write(&reg, 1)) return false;
+    
+    // Read register value
+    return _i2c_dev->read(value, 1);
 }
 
 uint16_t IS31FL373x_Device::coordToIndex(uint8_t x, uint8_t y) const {
