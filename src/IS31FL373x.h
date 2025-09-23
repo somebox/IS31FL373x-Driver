@@ -95,7 +95,7 @@ private:
 #endif
 
 // Version
-#define IS31FL373X_VERSION \"1.0.9\"
+#define IS31FL373X_VERSION "1.0.10"
 
 // Forward declarations for the unified driver architecture
 class IS31FL373x_Device;

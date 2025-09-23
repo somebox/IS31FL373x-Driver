@@ -55,7 +55,10 @@ def update_header_define(path: Path, version: str) -> bool:
     pattern = re.compile(r"(#define\s+IS31FL373X_VERSION\s+)\"[^\"]*\"")
     if not pattern.search(content):
         raise SystemExit("Could not find IS31FL373X_VERSION define in header.")
-    new_content = pattern.sub(rf"\1\"{version}\"", content)
+    # Use a callable replacement to avoid escape semantics in replacement strings
+    def repl(m: re.Match) -> str:
+        return f"{m.group(1)}\"{version}\""
+    new_content = pattern.sub(repl, content)
     path.write_text(new_content, encoding="utf-8")
     return True
 
