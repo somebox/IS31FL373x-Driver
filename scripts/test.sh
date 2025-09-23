@@ -13,12 +13,20 @@ FAILED_TESTS=()
 
 # 1. Run comprehensive unit tests (the real validation)
 echo "📋 Running Unit Tests..."
-if pio test -e native_test --verbose; then
+TEST_LOG=/tmp/native_test_output.log
+pio test -e native_test --verbose | tee "$TEST_LOG"
+if [ ${PIPESTATUS[0]} -eq 0 ]; then
     echo "    ✅ Unit tests passed"
 else
     echo "    ❌ Unit tests failed"
     OVERALL_SUCCESS=false
     FAILED_TESTS+=("unit_tests")
+fi
+
+# Print concise doctest summary
+if [ -f "$TEST_LOG" ]; then
+    echo "    ── Doctest summary"
+    grep -E '^\[doctest\] (test cases|assertions|Status:)' "$TEST_LOG" | sed 's/^/    /'
 fi
 
 echo ""

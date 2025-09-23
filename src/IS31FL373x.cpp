@@ -22,15 +22,20 @@ size_t getMockI2COperationCount() {
 }
 
 bool Adafruit_I2CDevice::write(uint8_t* buffer, size_t len) {
-    if (buffer == nullptr || len < 2) return true;
+    if (buffer == nullptr || len == 0) return true;
     
-    // Track I2C write operations (register writes)
+    // Track I2C writes in tests: both 1-byte (address latch) and 2+ byte (reg/value)
     MockI2COperation op;
     op.addr = _addr;
     op.reg = buffer[0];
-    op.value = buffer[1];
+    op.value = (len >= 2) ? buffer[1] : 0;
     op.isWrite = true;
     mockI2COperations.push_back(op);
+    
+    // Remember last addressed register for subsequent read tracing
+    if (len == 1) {
+        _lastReg = buffer[0];
+    }
     
     return true;
 }
@@ -128,19 +133,29 @@ void IS31FL373x_Device::show() {
     // Switch to PWM page
     selectPage(IS31FL373X_PAGE_PWM);
     
-    // Write PWM buffer to device using proper coordinate transformation
-    // This ensures correct mapping between buffer coordinates and hardware registers
+    // When a custom layout is active, iterate layout entries instead of matrix scan
+    if (_useCustomLayout && _customLayout != nullptr && _layoutSize > 0) {
+        uint16_t maxIndex = (_layoutSize < getPWMBufferSize()) ? _layoutSize : getPWMBufferSize();
+        for (uint16_t i = 0; i < maxIndex; i++) {
+            const PixelMapEntry& entry = _customLayout[i];
+            // entry.cs and entry.sw are 1-based; apply offsets here
+            uint8_t cs = static_cast<uint8_t>(entry.cs + _csOffset);
+            uint8_t sw = static_cast<uint8_t>(entry.sw + _swOffset);
+            uint16_t regAddress = csSwToIndex(cs, sw);
+            writeRegister(static_cast<uint8_t>(regAddress), _pwmBuffer[i]);
+        }
+        return;
+    }
     
+    // Default matrix scan using coordinate transformation
     uint8_t width = getWidth();
     uint8_t height = getHeight();
-    
     for (uint8_t row = 0; row < height; row++) {
         for (uint8_t col = 0; col < width; col++) {
-            uint16_t bufferIndex = row * width + col;  // Linear buffer index
-            uint16_t regAddress = coordToIndex(col, row);  // Use proper coordinate transformation
-            
+            uint16_t bufferIndex = row * width + col;
+            uint16_t regAddress = coordToIndex(col, row);
             if (bufferIndex < getPWMBufferSize()) {
-                writeRegister(regAddress, _pwmBuffer[bufferIndex]);
+                writeRegister(static_cast<uint8_t>(regAddress), _pwmBuffer[bufferIndex]);
             }
         }
     }
@@ -241,10 +256,11 @@ uint16_t IS31FL373x_Device::coordToIndex(uint8_t x, uint8_t y) const {
     // Apply coordinate offsets for hardware compatibility
     uint8_t cs = x + _csOffset + 1;  // Convert to 1-based CS (CSx)
     uint8_t sw = y + _swOffset + 1;  // Convert to 1-based SW (SWy)
-    
-    // Use chip-specific register mapping formula: Address = (SWy - 1) * stride + (CSx - 1)
-    // IS31FL3733: stride = 16, IS31FL3737B: stride = 16 (sparse layout with gaps)
-    return static_cast<uint16_t>((sw - 1) * getRegisterStride() + (cs - 1));
+    return csSwToIndex(cs, sw);
+}
+uint16_t IS31FL373x_Device::csSwToIndex(uint8_t cs1Based, uint8_t sw1Based) const {
+    // Generic mapping: Address = (SWy - 1) * stride + (CSx - 1)
+    return static_cast<uint16_t>((sw1Based - 1) * getRegisterStride() + (cs1Based - 1));
 }
 
 void IS31FL373x_Device::indexToCoord(uint16_t index, uint8_t* x, uint8_t* y) const {
@@ -339,21 +355,18 @@ uint8_t IS31FL3737::calculateAddress(ADDR addr) {
 }
 
 uint16_t IS31FL3737::coordToIndex(uint8_t x, uint8_t y) const {
-    // IS31FL3737 hardware quirk: CS6-CS11 (columns 6-11) map to register addresses 8-13
-    // This is because the IS31FL3737 has gaps in its register mapping
-    // Based on working implementation: if (cs >= 6 && cs < 12) cs += 2;
-    
-    // Apply coordinate offsets for hardware compatibility
-    uint8_t cs = x + _csOffset + 1;  // Convert to 1-based CS (CSx)
-    uint8_t sw = y + _swOffset + 1;  // Convert to 1-based SW (SWy)
-    
-    // Apply IS31FL3737 hardware remapping for CS6-CS11
-    if (cs >= 7 && cs <= 12) {  // CS7-CS12 in 1-based (6-11 in 0-based)
-        cs += 2;  // Remap to CS9-CS14 (8-13 in 0-based)
+    // Apply offsets via base then chip-specific quirk via csSwToIndex
+    uint8_t cs = x + _csOffset + 1;
+    uint8_t sw = y + _swOffset + 1;
+    return csSwToIndex(cs, sw);
+}
+uint16_t IS31FL3737::csSwToIndex(uint8_t cs1Based, uint8_t sw1Based) const {
+    // Apply IS31FL3737 hardware remapping for CS6-CS11 (0-based) => CS7-CS12 (1-based)
+    uint8_t cs = cs1Based;
+    if (cs >= 7 && cs <= 12) {
+        cs = static_cast<uint8_t>(cs + 2);
     }
-    
-    // Use chip-specific register mapping formula: Address = (SWy - 1) * stride + (CSx - 1)
-    return static_cast<uint16_t>((sw - 1) * getRegisterStride() + (cs - 1));
+    return static_cast<uint16_t>((sw1Based - 1) * getRegisterStride() + (cs - 1));
 }
 
 void IS31FL3737::indexToCoord(uint16_t index, uint8_t* x, uint8_t* y) const {
@@ -397,6 +410,8 @@ uint8_t IS31FL3737B::calculateAddress(ADDR addr) {
 
 void IS31FL3737B::setPWMFrequency(uint8_t freq) {
     // TODO: Implement PWM frequency setting specific to 3737B
+    (void)freq;
+    // TODO(test): verify correct FUNCTION page writes when implemented
 }
 
 // Canvas Implementation
@@ -480,18 +495,38 @@ uint16_t IS31FL373x_Canvas::getTotalNonZeroPixelCount() const {
 
 IS31FL373x_Device* IS31FL373x_Canvas::getDeviceForCoordinate(int16_t x, int16_t y, 
                                                            int16_t* localX, int16_t* localY) {
-    // TODO: Implement coordinate to device mapping based on layout
-    // For now, simple horizontal layout
-    if (_layout == LAYOUT_HORIZONTAL && _deviceCount > 0 && _devices[0] != nullptr) {
-        uint8_t deviceWidth = _devices[0]->getWidth();
-        uint8_t deviceIndex = x / deviceWidth;
-        
-        if (deviceIndex < _deviceCount && _devices[deviceIndex] != nullptr) {
-            *localX = x % deviceWidth;
-            *localY = y;
-            return _devices[deviceIndex];
+    if (_deviceCount == 0) return nullptr;
+    // Horizontal: slice x across devices by cumulative widths
+    if (_layout == LAYOUT_HORIZONTAL) {
+        int16_t cursor = 0;
+        for (uint8_t i = 0; i < _deviceCount; i++) {
+            IS31FL373x_Device* dev = _devices[i];
+            if (dev == nullptr) continue;
+            int16_t next = cursor + dev->getWidth();
+            if (x >= cursor && x < next && y >= 0 && y < dev->getHeight()) {
+                *localX = x - cursor;
+                *localY = y;
+                return dev;
+            }
+            cursor = next;
         }
+        return nullptr;
     }
-    
+    // Vertical: slice y across devices by cumulative heights
+    if (_layout == LAYOUT_VERTICAL) {
+        int16_t cursor = 0;
+        for (uint8_t i = 0; i < _deviceCount; i++) {
+            IS31FL373x_Device* dev = _devices[i];
+            if (dev == nullptr) continue;
+            int16_t next = cursor + dev->getHeight();
+            if (y >= cursor && y < next && x >= 0 && x < dev->getWidth()) {
+                *localX = x;
+                *localY = y - cursor;
+                return dev;
+            }
+            cursor = next;
+        }
+        return nullptr;
+    }
     return nullptr;
 }

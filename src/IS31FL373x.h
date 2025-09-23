@@ -33,21 +33,57 @@ public:
     virtual void drawPixel(int16_t x, int16_t y, uint16_t color) = 0;
     int16_t width() const { return _width; }
     int16_t height() const { return _height; }
+    // Minimal subset of Adafruit_GFX primitives for UNIT_TEST
+    void drawFastHLine(int16_t x, int16_t y, int16_t w, uint16_t color) {
+        for (int16_t i = 0; i < w; i++) {
+            drawPixel(x + i, y, color);
+        }
+    }
+    void drawFastVLine(int16_t x, int16_t y, int16_t h, uint16_t color) {
+        for (int16_t i = 0; i < h; i++) {
+            drawPixel(x, y + i, color);
+        }
+    }
+    void drawRect(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color) {
+        if (w <= 0 || h <= 0) return;
+        drawFastHLine(x, y, w, color);
+        if (h > 1) drawFastHLine(x, y + h - 1, w, color);
+        if (h > 2) {
+            drawFastVLine(x, y + 1, h - 2, color);
+            if (w > 1) drawFastVLine(x + w - 1, y + 1, h - 2, color);
+        }
+    }
+    void fillRect(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color) {
+        for (int16_t j = 0; j < h; j++) {
+            drawFastHLine(x, y + j, w, color);
+        }
+    }
 protected:
     int16_t _width, _height;
 };
 
 class Adafruit_I2CDevice {
 public:
-    Adafruit_I2CDevice(uint8_t addr, TwoWire* wire = nullptr) : _addr(addr), _wire(wire) {}
+    Adafruit_I2CDevice(uint8_t addr, TwoWire* wire = nullptr) : _addr(addr), _wire(wire), _lastReg(0) {}
     virtual ~Adafruit_I2CDevice() = default;
     bool begin() { return true; }
     bool write(uint8_t* buffer, size_t len);
-    bool read(uint8_t* buffer, size_t len) { return true; }
+    bool read(uint8_t* buffer, size_t len) {
+        (void)buffer; (void)len;
+        // Track I2C read operations during UNIT_TESTs
+        MockI2COperation op;
+        op.addr = _addr;
+        op.reg = _lastReg;
+        op.value = 0;
+        op.isWrite = false;
+        mockI2COperations.push_back(op);
+        return true;
+    }
     uint8_t getAddr() const { return _addr; }
 private:
     uint8_t _addr;
     TwoWire* _wire;
+    uint8_t _lastReg;  // tracks last addressed register for UNIT_TEST read tracing
 };
 #else
 // Real Arduino includes
@@ -59,7 +95,7 @@ private:
 #endif
 
 // Version
-#define IS31FL373X_VERSION "1.0.8"
+#define IS31FL373X_VERSION \"1.0.9\"
 
 // Forward declarations for the unified driver architecture
 class IS31FL373x_Device;
@@ -138,10 +174,15 @@ public:
     void setCoordinateOffset(uint8_t csOffset, uint8_t swOffset);
 
 protected:
+    // Convert hardware CS/SW (1-based) to register index. Derived classes can
+    // override to apply chip-specific quirks. Offsets are NOT applied here.
+    virtual uint16_t csSwToIndex(uint8_t cs1Based, uint8_t sw1Based) const;
+
     Adafruit_I2CDevice* _i2c_dev;
     uint8_t* _pwmBuffer;
     uint8_t _globalCurrent;
     uint8_t _masterBrightness;
+    bool _ownsI2CDevice = true;
     
     // I2C parameters (stored for delayed initialization)
     uint8_t _addr;
@@ -176,6 +217,10 @@ public:
     bool isCustomLayoutActive() const { return _useCustomLayout; }
     uint16_t getLayoutSize() const { return _layoutSize; }
     uint8_t getI2CAddress() const { return _addr; }
+#ifdef UNIT_TEST
+    // Test-only: inject a custom I2C device without transferring ownership
+    void setI2CDeviceForTest(Adafruit_I2CDevice* dev) { _i2c_dev = dev; _ownsI2CDevice = false; }
+#endif
 };
 
 /**
@@ -217,6 +262,8 @@ public:
     // Override coordinate mapping for IS31FL3737 hardware quirk
     uint16_t coordToIndex(uint8_t x, uint8_t y) const override;
     void indexToCoord(uint16_t index, uint8_t* x, uint8_t* y) const override;
+protected:
+    uint16_t csSwToIndex(uint8_t cs1Based, uint8_t sw1Based) const override;
 
 private:
     uint8_t calculateAddress(ADDR addr);
@@ -240,6 +287,7 @@ public:
     
     // IS31FL3737B-specific features
     void setPWMFrequency(uint8_t freq);  // Selectable PWM frequency: 1.05-26.7 kHz
+    // TODO(test): write FUNCTION page frequency bits when implemented
 
 private:
     uint8_t calculateAddress(ADDR addr);

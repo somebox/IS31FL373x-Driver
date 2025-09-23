@@ -47,6 +47,7 @@ void loop() {
 
 - [Complete API Reference](doc/API.md)
 - [Hardware Reference](doc/IS31FL373x-reference.md)
+- Adafruit GFX core used for drawing primitives: [Adafruit-GFX-Library](https://github.com/adafruit/Adafruit-GFX-Library)
 
 ## Example Usage
 
@@ -65,13 +66,18 @@ void setup() {
   matrix.setGlobalCurrent(128);     // Set hardware current (0-255)
   matrix.setMasterBrightness(255);  // Set application brightness (software, 0-255)
 
-  // For IS31FL3737B only:
-  // matrix.setPWMFrequency(PWM_FREQ_26_7_KHZ);
+  // For IS31FL3737B only (not yet fully implemented):
+  // matrix.setPWMFrequency(7); // 0..7 per datasheet
 }
 
 void loop() {
   matrix.clear();
   matrix.drawPixel(5, 5, 255);      // Draw at (x=5, y=5) with max brightness
+  // Any Adafruit_GFX primitive is available:
+  matrix.drawLine(0, 0, 11, 11, 200);
+  matrix.drawRect(2, 2, 8, 6, 180);
+  matrix.setCursor(0, 0);
+  matrix.print("Hi");
   matrix.show();                     // Push buffer to hardware
   
   // FPS monitoring would require implementation
@@ -80,15 +86,14 @@ void loop() {
 }
 ```
 
-#### Multi-Chip Canvas
+#### Multi-Board Canvas (Build a Larger XY Matrix)
 
 ```cpp
 #include "IS31FL373x.h"
 
-// Three IS31FL3737 chips with different addresses
-IS31FL3737 matrix1(ADDR::GND), matrix2(ADDR::VCC), matrix3(ADDR::SDA);
-IS31FL373x_Device* devices[] = {&matrix1, &matrix2, &matrix3};
-
+// Example: 3 boards of 12×12 each → a 36×12 logical matrix
+IS31FL3737 left(ADDR::GND), middle(ADDR::VCC), right(ADDR::SDA);
+IS31FL373x_Device* devices[] = { &left, &middle, &right };
 IS31FL373x_Canvas canvas(36, 12, devices, 3, LAYOUT_HORIZONTAL);
 
 void setup() {
@@ -97,12 +102,66 @@ void setup() {
 }
 
 void loop() {
+  // Draw on the 36×12 logical surface; the canvas routes to the right board
   canvas.clear();
-  canvas.setCursor(0, 2);
-  canvas.print("SCROLLING TEXT");
+  // A pixel on the middle board (x in [12, 23])
+  canvas.drawPixel(18, 5, 255);
+  // A pixel on the right board (x in [24, 35])
+  canvas.drawPixel(30, 8, 128);
+  // Adafruit_GFX primitives work on the canvas, too:
+  canvas.drawLine(0, 0, 35, 11, 90);
+  canvas.setCursor(0, 0);
+  canvas.print("HELLO");
   canvas.show();
 }
 ```
+
+For vertical stacking, use `LAYOUT_VERTICAL` and set the canvas size to `(max(widths), sum(heights))`. See the API doc “Canvas Sizing and Routing” for sizing and routing rules.
+
+## Coordinate System & Register Mapping
+
+- **User coordinates**: `(x, y)` with origin at the top-left. `x` increases to the right, `y` increases downward.
+- **Chip dimensions**:
+  - `IS31FL3733`: width 16, height 12
+  - `IS31FL3737 / IS31FL3737B`: width 12, height 12
+- **Register stride**: All supported chips use a hardware register stride of 16 bytes per row (even when width is 12). The driver maps `(x, y)` to a hardware register address via:
+
+```cpp
+// 1-based hardware pins (CSx, SWy), with optional offsets applied
+address = (SWy - 1) * 16 + (CSx - 1);
+```
+
+- **IS31FL3737 quirk**: Columns 6–11 (0-based) are remapped and occupy addresses 8–13 (gap of +2). The driver applies this automatically. Example (row 0):
+  - `(x=5, y=0) → address 5`
+  - `(x=6, y=0) → address 8` (remapped)
+  - `(x=11, y=0) → address 13` (remapped)
+
+- **Offsets**: `setCoordinateOffset(csOffset, swOffset)` shifts the mapping by hardware pin offsets (used for compatibility across boards or wiring variants). Offsets apply before stride mapping and, for IS31FL3737, before the quirk remap.
+
+### Custom Layouts (Non-Matrix)
+
+If your LEDs are not arranged in a rectangular matrix (e.g., a ring or a 7‑segment display), define a `PixelMapEntry[]` that maps each logical index to a physical `(CS, SW)` pin. When a custom layout is set, `show()` writes each index to its mapped register address using the same stride and quirk handling.
+
+ 
+
+## Testing
+
+- Native unit tests (doctest):
+
+```bash
+pio test -e native_test           # concise PlatformIO summary
+pio test -e native_test -v        # full doctest summary
+```
+
+- Full CI-like run with a short doctest summary and hardware example builds:
+
+```bash
+./scripts/test.sh
+```
+
+Notes:
+- Native tests use a mock I2C layer and validate register/page transactions.
+- Hardware environments are compile-tested by the script; unit tests run only under the native environment.
 
 #### Custom Layout Mapping (e.g., Analog Clock)
 
@@ -160,6 +219,7 @@ void loop() {
 ## Project Roadmap
 
 *   Full support for the hardware **Auto-Breath Mode (ABM)** engine.
+*   Complete support for the hardware **PWM Frequency Selector** for the IS31FL3737B.
 *   Add software gamma correction to the library, to allow calibration of the LED brightness.
 *   API for reading **Open/Short circuit detection** registers for diagnostics.
 *   Complete Raspberry Pi Pico platform support.

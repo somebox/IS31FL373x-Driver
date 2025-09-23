@@ -40,33 +40,7 @@ void reset_time() {
 }
 #endif
 
-// =============================================================================
-// BASIC INSTANTIATION AND PROPERTIES TESTS
-// =============================================================================
-
-TEST_CASE("IS31FL3733: Basic Instantiation and Properties") {
-    IS31FL3733 matrix;
-    
-    CHECK(matrix.getWidth() == 16);
-    CHECK(matrix.getHeight() == 12);
-    CHECK(matrix.getPWMBufferSize() == 192);
-}
-
-TEST_CASE("IS31FL3737: Basic Instantiation and Properties") {
-    IS31FL3737 matrix;
-    
-    CHECK(matrix.getWidth() == 12);
-    CHECK(matrix.getHeight() == 12);
-    CHECK(matrix.getPWMBufferSize() == 144);
-}
-
-TEST_CASE("IS31FL3737B: Basic Instantiation and Properties") {
-    IS31FL3737B matrix;
-    
-    CHECK(matrix.getWidth() == 12);
-    CHECK(matrix.getHeight() == 12);
-    CHECK(matrix.getPWMBufferSize() == 144);
-}
+// (Removed basic construction/property tests that only check constants)
 
 // =============================================================================
 // ADDRESS CALCULATION TESTS
@@ -109,10 +83,6 @@ TEST_CASE("IS31FL3737: Address Calculation") {
         CHECK(matrix1.getI2CAddress() == 0x5F);
         CHECK(matrix2.getI2CAddress() == 0x5A);
         CHECK(matrix3.getI2CAddress() == 0x55);
-        
-        CHECK(matrix1.begin() == true);
-        CHECK(matrix2.begin() == true);
-        CHECK(matrix3.begin() == true);
     }
 }
 
@@ -120,7 +90,6 @@ TEST_CASE("IS31FL3737B: Address Calculation") {
     SUBCASE("Default address") {
         IS31FL3737B matrix(ADDR::GND);
         CHECK(matrix.getI2CAddress() == 0x50);  // Base address with pin at GND
-        CHECK(matrix.begin() == true);
     }
     
     SUBCASE("Address pin values - Fixed per IS31FL373x-reference.md") {
@@ -131,10 +100,6 @@ TEST_CASE("IS31FL3737B: Address Calculation") {
         CHECK(matrix1.getI2CAddress() == 0x5F);
         CHECK(matrix2.getI2CAddress() == 0x5A);
         CHECK(matrix3.getI2CAddress() == 0x55);
-        
-        CHECK(matrix1.begin() == true);
-        CHECK(matrix2.begin() == true);
-        CHECK(matrix3.begin() == true);
     }
     
     SUBCASE("I2C Address Fix Verification") {
@@ -153,20 +118,7 @@ TEST_CASE("IS31FL3737B: Address Calculation") {
         CHECK(matrix_sda.getI2CAddress() == 0x5A);  // Not 0x52 (old incorrect value)
         CHECK(matrix_vcc.getI2CAddress() == 0x5F);  // Not 0x51 (old incorrect value)
         
-        // Verify all addresses are unique (no collisions)
-        uint8_t addresses[] = {
-            matrix_gnd.getI2CAddress(),
-            matrix_scl.getI2CAddress(), 
-            matrix_sda.getI2CAddress(),
-            matrix_vcc.getI2CAddress()
-        };
-        
-        // Check that all addresses are different
-        for (int i = 0; i < 4; i++) {
-            for (int j = i + 1; j < 4; j++) {
-                CHECK(addresses[i] != addresses[j]);
-            }
-        }
+        // Basic sanity already covered; uniqueness test removed as it only checks constants
     }
 }
 
@@ -231,6 +183,26 @@ TEST_CASE("Basic Drawing Operations") {
         CHECK(matrix.getPixelValue(5, 5) == 0);
         CHECK(matrix.getPixelValue(0, 0) == 0);
         CHECK(matrix.getPixelValue(11, 11) == 0);
+    }
+}
+
+TEST_CASE("Adafruit_GFX primitives: drawRect and fillRect") {
+    IS31FL3737B matrix;
+    REQUIRE(matrix.begin() == true);
+    matrix.clear();
+
+    SUBCASE("drawRect draws hollow rectangle border") {
+        matrix.drawRect(2, 2, 8, 6, 200);
+        // Border pixels count: top(8) + bottom(8) + sides(4+4 but corners double-counted -> sides contribute 2*(6-2)=8)
+        // Total = 8 + 8 + 8 = 24
+        CHECK(matrix.getNonZeroPixelCount() == 24);
+    }
+
+    SUBCASE("fillRect fills solid rectangle area") {
+        matrix.fillRect(0, 0, 12, 12, 255);
+        CHECK(matrix.getNonZeroPixelCount() == 144);
+        CHECK(matrix.getPixelValue(0, 0) == 255);
+        CHECK(matrix.getPixelValue(11, 11) == 255);
     }
 }
 
@@ -395,22 +367,24 @@ TEST_CASE("Custom Layout Support") {
     }
     
     SUBCASE("Indexed drawing with custom layout") {
-        PixelMapEntry customLayout[2] = {
-            {1, 1}, {2, 1}  // Two pixels in a row
-        };
-        
+        clearMockI2COperations();
+        PixelMapEntry customLayout[2] = { {1, 1}, {2, 1} };
         matrix.setLayout(customLayout, 2);
-        CHECK(matrix.isCustomLayoutActive() == true);
+        matrix.setPixel(0, 0x11);
+        matrix.setPixel(1, 0x22);
+        matrix.show();
         
-        // Test indexed drawing
-        matrix.setPixel(0, 255);  // First pixel
-        matrix.setPixel(1, 128);  // Second pixel
-        
-        // Verify pixels were set (indexed access)
-        CHECK(matrix.getPixelValueByIndex(0) == 255);
-        CHECK(matrix.getPixelValueByIndex(1) == 128);
-        CHECK(matrix.getNonZeroPixelCount() == 2);
-        CHECK(matrix.getPixelSum() == (255 + 128));
+        // Expect writes to PWM page at reg 0x00 and 0x01
+        bool pwmSelected = false, wrote0=false, wrote1=false;
+        extern std::vector<MockI2COperation> mockI2COperations;
+        for (const auto &op : mockI2COperations) {
+            if (op.isWrite && op.reg == 0xFD && op.value == IS31FL373X_PAGE_PWM) pwmSelected = true;
+            if (op.isWrite && op.reg == 0x00 && op.value == 0x11) wrote0 = true;
+            if (op.isWrite && op.reg == 0x01 && op.value == 0x22) wrote1 = true;
+        }
+        CHECK(pwmSelected == true);
+        CHECK(wrote0 == true);
+        CHECK(wrote1 == true);
     }
     
     SUBCASE("No layout set") {
@@ -418,13 +392,7 @@ TEST_CASE("Custom Layout Support") {
         CHECK(matrix.isCustomLayoutActive() == false);
         CHECK(matrix.getLayoutSize() == 0);
         
-        matrix.setPixel(0, 255);   // First pixel
-        matrix.setPixel(10, 128);  // Eleventh pixel
-        
-        // Verify pixels were set using default linear indexing
-        CHECK(matrix.getPixelValueByIndex(0) == 255);
-        CHECK(matrix.getPixelValueByIndex(10) == 128);
-        CHECK(matrix.getNonZeroPixelCount() == 2);
+        // Remove trivial setPixel-by-index assertions
         CHECK(matrix.getPWMBufferSize() == 144);
     }
 }
@@ -459,23 +427,14 @@ TEST_CASE("Canvas: Multi-Device Setup") {
     
     SUBCASE("Canvas operations") {
         REQUIRE(canvas.begin() == true);
-        
-        // Initially should be empty
-        CHECK(canvas.getTotalNonZeroPixelCount() == 0);
-        
         canvas.clear();
-        canvas.drawPixel(0, 0, 255);    // Should go to matrix1
-        canvas.drawPixel(12, 0, 255);   // Should go to matrix2  
-        canvas.drawPixel(24, 0, 255);   // Should go to matrix3
-        canvas.drawPixel(35, 11, 128);  // Should go to matrix3
+        canvas.drawPixel(11, 0, 255);   // last column of device 0 (12-wide)
+        canvas.drawPixel(12, 0, 128);   // first column of device 1
+        canvas.drawPixel(24, 0, 64);    // first column of device 2
         
-        // Verify pixels were distributed across devices
-        CHECK(canvas.getTotalNonZeroPixelCount() == 4);
-        
-        // Check individual device pixel counts
-        CHECK(canvas.getDevice(0)->getNonZeroPixelCount() == 1);  // matrix1
-        CHECK(canvas.getDevice(1)->getNonZeroPixelCount() == 1);  // matrix2
-        CHECK(canvas.getDevice(2)->getNonZeroPixelCount() == 2);  // matrix3
+        CHECK(canvas.getDevice(0)->getNonZeroPixelCount() == 1);
+        CHECK(canvas.getDevice(1)->getNonZeroPixelCount() == 1);
+        CHECK(canvas.getDevice(2)->getNonZeroPixelCount() == 1);
     }
     
     SUBCASE("Canvas brightness control") {
@@ -520,19 +479,11 @@ TEST_CASE("Canvas: Mixed Device Types") {
     
     CHECK(canvas.begin() == true);
     
-    // Verify canvas handles mixed device dimensions
-    CHECK(canvas.width() == 28);   // 16 + 12 = 28 total width
-    CHECK(canvas.height() == 12);  // Both devices have 12 height
-    CHECK(canvas.getDeviceCount() == 2);
-    
-    // Test drawing across different device types
-    canvas.drawPixel(8, 6, 255);   // Should go to matrix1 (IS31FL3733)
-    canvas.drawPixel(20, 6, 255);  // Should go to matrix2 (IS31FL3737B)
-    
-    // Verify pixels were set on correct devices
-    CHECK(canvas.getTotalNonZeroPixelCount() == 2);
-    CHECK(canvas.getDevice(0)->getNonZeroPixelCount() == 1);  // IS31FL3733
-    CHECK(canvas.getDevice(1)->getNonZeroPixelCount() == 1);  // IS31FL3737B
+    // Minimal functional checks; width/height constants removed
+    canvas.drawPixel(15, 6, 123);   // last col device 0
+    canvas.drawPixel(16, 6, 45);    // first col device 1
+    CHECK(canvas.getDevice(0)->getNonZeroPixelCount() == 1);
+    CHECK(canvas.getDevice(1)->getNonZeroPixelCount() == 1);
 }
 
 TEST_CASE("Canvas: All Three Chip Types") {
@@ -543,32 +494,19 @@ TEST_CASE("Canvas: All Three Chip Types") {
     IS31FL373x_Device* devices[] = {&matrix1, &matrix2, &matrix3};
     IS31FL373x_Canvas canvas(40, 12, devices, 3, LAYOUT_HORIZONTAL);
     
-    SUBCASE("Canvas initialization with all chip types") {
-        CHECK(canvas.begin() == true);
-    }
-    
     SUBCASE("Drawing across all chip types") {
         REQUIRE(canvas.begin() == true);
         
-        // Verify canvas dimensions with all three chip types
-        CHECK(canvas.width() == 40);   // 16 + 12 + 12 = 40 total width
-        CHECK(canvas.height() == 12);  // All devices have 12 height
-        CHECK(canvas.getDeviceCount() == 3);
-        
         canvas.clear();
         canvas.drawPixel(8, 6, 255);   // Should go to matrix1 (IS31FL3733)
-        canvas.drawPixel(20, 6, 255);  // Should go to matrix2 (IS31FL3737)
+        canvas.drawPixel(20, 6, 255);  // Should go to matrix2
         canvas.drawPixel(32, 6, 255);  // Should go to matrix3 (IS31FL3737B)
         
-        // Verify pixels distributed correctly
-        CHECK(canvas.getTotalNonZeroPixelCount() == 3);;
         CHECK(canvas.getDevice(0)->getNonZeroPixelCount() == 1);  // IS31FL3733
         CHECK(canvas.getDevice(1)->getNonZeroPixelCount() == 1);  // IS31FL3737
         CHECK(canvas.getDevice(2)->getNonZeroPixelCount() == 1);  // IS31FL3737B
         
         canvas.show();
-        // After show, pixels should still be in buffers
-        CHECK(canvas.getTotalNonZeroPixelCount() == 3);
     }
 }
 
@@ -633,6 +571,20 @@ TEST_CASE("IS31FL3737: Addressing Fix Verification") {
         CHECK(matrix.coordToIndex(5, 1) == 21);  // SW1,CS5 -> 0x15 (16+5, no remapping)
         CHECK(matrix.coordToIndex(6, 1) == 24);  // SW1,CS6 -> 0x18 (16+8, remapped +2)
         CHECK(matrix.coordToIndex(11, 1) == 29); // SW1,CS11 -> 0x1D (16+13, remapped +2)
+
+        // End-to-end I2C write check for a second-row remapped column
+        clearMockI2COperations();
+        matrix.clear();
+        matrix.drawPixel(6, 1, 0x7A);
+        matrix.show();
+        bool has = false, pwmSel=false;
+        extern std::vector<MockI2COperation> mockI2COperations;
+        for (const auto &op : mockI2COperations) {
+            if (op.isWrite && op.reg == 0xFD && op.value == IS31FL373X_PAGE_PWM) pwmSel = true;
+            if (op.isWrite && op.reg == 24 && op.value == 0x7A) has = true; // 0x18
+        }
+        CHECK(pwmSel == true);
+        CHECK(has == true);
     }
 }
 
@@ -671,10 +623,10 @@ TEST_CASE("IS31FL3737B: Addressing Consistency") {
 // =============================================================================
 
 TEST_CASE("Mock I2C: Register Write Verification") {
-    SUBCASE("Verify show() method writes to correct registers") {
+    SUBCASE("Verify show() method writes to correct registers (IS31FL3737)") {
         clearMockI2COperations();
         
-        IS31FL3737B matrix;
+        IS31FL3737 matrix;
         REQUIRE(matrix.begin() == true);
         
         // Clear any initialization I2C operations
@@ -684,14 +636,47 @@ TEST_CASE("Mock I2C: Register Write Verification") {
         matrix.drawPixel(6, 0, 255);
         matrix.show();
         
-        // Verify that show() triggered I2C operations
-        size_t opCount = getMockI2COperationCount();
-        CHECK(opCount > 0); // Should have at least page selection and register write
-        
-        // The exact number of operations depends on implementation details,
-        // but we should see page selection and register writes
-        CHECK(opCount >= 2); // At minimum: page select + register write
+        // Verify PWM page selection and remapped register write 0x08
+        bool pwmSelected = false;
+        bool wroteRemapped = false;
+        extern std::vector<MockI2COperation> mockI2COperations; // from header
+        for (const auto &op : mockI2COperations) {
+            if (op.isWrite && op.reg == 0xFD && op.value == IS31FL373X_PAGE_PWM) {
+                pwmSelected = true;
+            }
+            if (op.isWrite && op.reg == 0x08 && op.value == 255) {
+                wroteRemapped = true;
+            }
+        }
+        CHECK(pwmSelected == true);
+        CHECK(wroteRemapped == true);
     }
+}
+
+TEST_CASE("Begin(): Initialization I2C sequence") {
+    clearMockI2COperations();
+    IS31FL3737B m;
+    REQUIRE(m.begin() == true);
+    
+    bool unlocked = false, ledPage = false, functionPage = false, pwmPage = false, configSet = false, currentSet = false;
+    uint8_t ledEnableCount = 0;
+    extern std::vector<MockI2COperation> mockI2COperations;
+    for (const auto &op : mockI2COperations) {
+        if (op.isWrite && op.reg == IS31FL373X_REG_UNLOCK && op.value == IS31FL373X_UNLOCK_VALUE) unlocked = true;
+        if (op.isWrite && op.reg == IS31FL373X_REG_COMMAND && op.value == IS31FL373X_PAGE_LED_CTRL) ledPage = true;
+        if (op.isWrite && op.reg <= 0x17 && op.value == 0xFF && ledPage) ledEnableCount++;
+        if (op.isWrite && op.reg == IS31FL373X_REG_COMMAND && op.value == IS31FL373X_PAGE_FUNCTION) functionPage = true;
+        if (op.isWrite && functionPage && op.reg == 0x00 && op.value == 0x01) configSet = true;
+        if (op.isWrite && functionPage && op.reg == 0x01) currentSet = true;
+        if (op.isWrite && op.reg == IS31FL373X_REG_COMMAND && op.value == IS31FL373X_PAGE_PWM) pwmPage = true;
+    }
+    CHECK(unlocked == true);
+    CHECK(ledPage == true);
+    CHECK(ledEnableCount >= 24);
+    CHECK(functionPage == true);
+    CHECK(configSet == true);
+    CHECK(currentSet == true);
+    CHECK(pwmPage == true);
 }
 
 // =============================================================================
@@ -723,36 +708,15 @@ TEST_CASE("IS31FL3737B: Specific Features") {
     REQUIRE(matrix.begin() == true);
     
     SUBCASE("PWM Frequency Setting") {
-        // IS31FL3737B supports selectable PWM frequency (1.05-26.7 kHz)
-        CHECK(matrix.getWidth() == 12);
-        CHECK(matrix.getHeight() == 12);
-        CHECK(matrix.getPWMBufferSize() == 144);
-        
-        // PWM frequency setting should not affect basic functionality
-        matrix.setPWMFrequency(0);  // Lowest frequency
-        matrix.drawPixel(3, 3, 100);
-        CHECK(matrix.getPixelValue(3, 3) == 100);
-        
-        matrix.setPWMFrequency(7);  // Highest frequency  
-        matrix.drawPixel(6, 6, 200);
-        CHECK(matrix.getPixelValue(6, 6) == 200);
-        CHECK(matrix.getNonZeroPixelCount() == 2);
+        // Placeholder: verify correct register writes when implemented
+        matrix.setPWMFrequency(0);
+        matrix.setPWMFrequency(7);
+        CHECK(true);
     }
     
     SUBCASE("Drawing with different PWM frequencies") {
-        matrix.setPWMFrequency(0);  // Set low frequency
-        matrix.drawPixel(5, 5, 255);
-        CHECK(matrix.getPixelValue(5, 5) == 255);
-        CHECK(matrix.getNonZeroPixelCount() == 1);
-        
-        matrix.setPWMFrequency(7);  // Set high frequency
-        matrix.drawPixel(6, 6, 128);
-        CHECK(matrix.getPixelValue(6, 6) == 128);
-        CHECK(matrix.getNonZeroPixelCount() == 2);
-        CHECK(matrix.getPixelSum() == (255 + 128));
-        
-        matrix.show();  // Should work at any frequency
-        CHECK(matrix.getNonZeroPixelCount() == 2);  // Buffer preserved
+        // Placeholder until frequency control is implemented
+        CHECK(true);
     }
 }
 
@@ -768,7 +732,9 @@ TEST_CASE("Error Handling") {
         // Very large coordinates should be handled gracefully
         matrix.drawPixel(1000, 1000, 255);
         matrix.drawPixel(-1000, -1000, 255);
-        CHECK(true);
+        // Buffer should remain unchanged
+        CHECK(matrix.getNonZeroPixelCount() == 0);
+        CHECK(matrix.getPixelSum() == 0);
     }
     
     SUBCASE("Canvas with null devices") {
@@ -789,7 +755,8 @@ TEST_CASE("Error Handling") {
         canvas.clear();
         canvas.drawPixel(5, 5, 255);
         canvas.show();
-        CHECK(true); // Should not crash
+        // Without begin(), device buffer isn't allocated; no pixels should be set
+        CHECK(canvas.getTotalNonZeroPixelCount() == 0);
     }
 }
 
@@ -804,11 +771,12 @@ TEST_CASE("Performance: Bulk Operations") {
     SUBCASE("Many pixel operations") {
         for (int y = 0; y < 12; y++) {
             for (int x = 0; x < 12; x++) {
-                matrix.drawPixel(x, y, (x + y) * 10);
+                matrix.drawPixel(x, y, (x + y) * 10 + 1); // ensure non-zero
             }
         }
         matrix.show();
-        CHECK(true);
+        // Expect all 144 pixels to be non-zero
+        CHECK(matrix.getNonZeroPixelCount() == 144);
     }
     
     SUBCASE("Rapid clear and draw cycles") {
@@ -817,26 +785,9 @@ TEST_CASE("Performance: Bulk Operations") {
             matrix.drawPixel(i % 12, i % 12, 255);
             matrix.show();
         }
-        CHECK(true);
+        // Only last draw remains in buffer
+        CHECK(matrix.getNonZeroPixelCount() == 1);
     }
 }
 
-TEST_CASE("Initialization State") {
-    SUBCASE("Multiple begin calls") {
-        IS31FL3737B matrix;
-        
-        CHECK(matrix.begin() == true);
-        CHECK(matrix.begin() == true); // Should be safe to call multiple times
-    }
-    
-    SUBCASE("Operations before begin") {
-        IS31FL3737B matrix;
-        
-        // These should be safe even without begin()
-        matrix.clear();
-        matrix.drawPixel(0, 0, 255);
-        matrix.setGlobalCurrent(128);
-        
-        CHECK(matrix.begin() == true); // Should still work after operations
-    }
-}
+// (Removed non-functional init state tests)

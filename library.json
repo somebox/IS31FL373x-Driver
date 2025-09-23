@@ -1,6 +1,6 @@
 {
   "name": "IS31FL373x Driver",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "description": "Unified Arduino driver for Lumissil IS31FL3733 (12x16) and IS31FL3737B (12x12) LED matrix controllers with multi-chip canvas support, custom layouts, and Adafruit_GFX integration.",
   "keywords": [
     "is31fl3733",
@@ -33,8 +33,16 @@
     "adafruit/Adafruit BusIO": "^1.17.0",
     "adafruit/Adafruit GFX Library": "^1.11.0"
   },
-  "frameworks": ["arduino"],
-  "platforms": ["atmelavr", "atmelsam", "espressif32", "teensy", "ststm32"],
+  "frameworks": [
+    "arduino"
+  ],
+  "platforms": [
+    "atmelavr",
+    "atmelsam",
+    "espressif32",
+    "teensy",
+    "ststm32"
+  ],
   "build": {
     "includeDir": "src"
   },

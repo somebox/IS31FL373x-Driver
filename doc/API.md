@@ -2,6 +2,8 @@
 
 Quick reference for all public methods, enums, and structures in the IS31FL373x LED matrix driver library.
 
+Both device classes and the canvas inherit from Adafruit_GFX, so you can use standard drawing primitives (drawLine, drawRect, print, etc.). See the upstream docs: [Adafruit-GFX-Library](https://github.com/adafruit/Adafruit-GFX-Library).
+
 ## Device Classes
 
 ### IS31FL3733 (12×16 matrix, 192 LEDs)
@@ -90,6 +92,7 @@ void indexToCoord(uint16_t index, uint8_t* x, uint8_t* y) const;  // Convert reg
 
 ```cpp
 void setPWMFrequency(uint8_t freq);      // Set PWM frequency (0-7, see datasheet)
+// Note: Placeholder in current version; register writes TBD
 ```
 
 ## Canvas Class (Multi-Chip Management)
@@ -109,6 +112,8 @@ bool begin();                           // Initialize all devices
 void show();                            // Update all devices
 void clear();                           // Clear all devices
 void drawPixel(int16_t x, int16_t y, uint16_t color);  // Draw across device boundaries
+// Inherits Adafruit_GFX: width(), height(), setCursor(), print(), drawLine(), etc.
+// begin() returns false if any device is null or a child begin() fails
 ```
 
 ### Canvas Configuration
@@ -126,7 +131,32 @@ uint8_t getDeviceCount() const;                     // Number of managed devices
 IS31FL373x_Device* getDevice(uint8_t index) const; // Get device by index
 CanvasLayout getLayout() const;                     // Current layout mode
 uint16_t getTotalNonZeroPixelCount() const;         // Non-zero pixels across all devices
+// width() and height() (from Adafruit_GFX) reflect the logical canvas size
 ```
+
+### Canvas Sizing and Routing
+
+The canvas presents a single XY surface by stitching multiple devices together.
+
+- Layouts:
+  - `LAYOUT_HORIZONTAL`: Devices arranged left-to-right.
+  - `LAYOUT_VERTICAL`: Devices arranged top-to-bottom.
+
+- Canvas size:
+  - Horizontal: width = sum of device widths, height = max device height.
+  - Vertical:   width = max device width,   height = sum of device heights.
+
+- Coordinate routing:
+  - In horizontal layout, the x coordinate determines which device receives the pixel; in vertical layout, the y coordinate does.
+  - The canvas automatically maps global (x, y) to the correct device and local coordinates.
+
+- Mixed sizes: Devices can have different widths/heights. The canvas uses cumulative boundaries per device, so boundary pixels land on the expected device.
+
+- Operations:
+  - `drawPixel()` routes to one child device using the rules above
+  - `clear()` and `show()` call the corresponding method on every child device
+
+Note: A tiled 2D grid layout is not yet available; current layouts are 1D horizontal/vertical.
 
 ## Enums and Constants
 
