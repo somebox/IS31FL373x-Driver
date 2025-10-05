@@ -13,11 +13,13 @@ struct MockI2COperation {
     uint8_t reg;
     uint8_t value;
     bool isWrite;
+    std::vector<uint8_t> bulkData;  // For bulk writes, stores all data bytes
 };
 
 extern std::vector<MockI2COperation> mockI2COperations;
 void clearMockI2COperations();
 size_t getMockI2COperationCount();
+bool mockI2CContainsWrite(uint8_t reg, uint8_t value);
 
 // Mock Arduino types and classes for testing
 class TwoWire {
@@ -200,6 +202,7 @@ protected:
     // Low-level I2C operations
     bool selectPage(uint8_t page);
     bool writeRegister(uint8_t reg, uint8_t value);
+    bool writeBulk(uint8_t startReg, const uint8_t* data, size_t length);
     bool readRegister(uint8_t reg, uint8_t* value);
     
 public:

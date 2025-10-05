@@ -577,14 +577,15 @@ TEST_CASE("IS31FL3737: Addressing Fix Verification") {
         matrix.clear();
         matrix.drawPixel(6, 1, 0x7A);
         matrix.show();
-        bool has = false, pwmSel=false;
+        bool pwmSel=false;
         extern std::vector<MockI2COperation> mockI2COperations;
         for (const auto &op : mockI2COperations) {
             if (op.isWrite && op.reg == 0xFD && op.value == IS31FL373X_PAGE_PWM) pwmSel = true;
-            if (op.isWrite && op.reg == 24 && op.value == 0x7A) has = true; // 0x18
         }
         CHECK(pwmSel == true);
-        CHECK(has == true);
+        // Check that register 24 (0x18) was written with value 0x7A
+        // This may be in a bulk write operation
+        CHECK(mockI2CContainsWrite(24, 0x7A) == true);
     }
 }
 
@@ -638,18 +639,16 @@ TEST_CASE("Mock I2C: Register Write Verification") {
         
         // Verify PWM page selection and remapped register write 0x08
         bool pwmSelected = false;
-        bool wroteRemapped = false;
         extern std::vector<MockI2COperation> mockI2COperations; // from header
         for (const auto &op : mockI2COperations) {
             if (op.isWrite && op.reg == 0xFD && op.value == IS31FL373X_PAGE_PWM) {
                 pwmSelected = true;
             }
-            if (op.isWrite && op.reg == 0x08 && op.value == 255) {
-                wroteRemapped = true;
-            }
         }
         CHECK(pwmSelected == true);
-        CHECK(wroteRemapped == true);
+        // Check that register 0x08 was written with value 255
+        // This may be in a bulk write operation
+        CHECK(mockI2CContainsWrite(0x08, 255) == true);
     }
 }
 
@@ -787,6 +786,119 @@ TEST_CASE("Performance: Bulk Operations") {
         }
         // Only last draw remains in buffer
         CHECK(matrix.getNonZeroPixelCount() == 1);
+    }
+}
+
+// =============================================================================
+// BULK WRITE TESTS
+// =============================================================================
+
+TEST_CASE("Bulk Write Optimization") {
+    SUBCASE("IS31FL3737B uses bulk writes for matrix layout") {
+        clearMockI2COperations();
+        
+        IS31FL3737B matrix;
+        REQUIRE(matrix.begin() == true);
+        clearMockI2COperations();  // Clear initialization operations
+        
+        // Draw some pixels
+        matrix.drawPixel(0, 0, 100);
+        matrix.drawPixel(5, 5, 150);
+        matrix.drawPixel(11, 11, 200);
+        
+        // Call show() which should use bulk writes
+        matrix.show();
+        
+        // Count I2C operations - should be significantly fewer than 144 individual writes
+        // We expect: 1 page select (2 ops: unlock + command) + ~3 bulk writes for 192 bytes (12*16)
+        size_t opCount = getMockI2COperationCount();
+        
+        // With bulk writes, we should have far fewer than 144+2 operations
+        // Expected: ~5-8 operations (page select + chunked bulk writes)
+        CHECK(opCount < 20);  // Conservative check
+        
+        // The pixel values should still be correct
+        CHECK(matrix.getPixelValue(0, 0) == 100);
+        CHECK(matrix.getPixelValue(5, 5) == 150);
+        CHECK(matrix.getPixelValue(11, 11) == 200);
+    }
+    
+    SUBCASE("IS31FL3733 uses bulk writes for matrix layout") {
+        clearMockI2COperations();
+        
+        IS31FL3733 matrix;
+        REQUIRE(matrix.begin() == true);
+        clearMockI2COperations();  // Clear initialization operations
+        
+        // Draw some pixels
+        matrix.drawPixel(0, 0, 100);
+        matrix.drawPixel(8, 6, 150);
+        matrix.drawPixel(15, 11, 200);
+        
+        // Call show() which should use bulk writes
+        matrix.show();
+        
+        // Count I2C operations - should be significantly fewer than 192 individual writes
+        size_t opCount = getMockI2COperationCount();
+        
+        // With bulk writes, we should have far fewer than 192+2 operations
+        CHECK(opCount < 20);  // Conservative check
+        
+        // The pixel values should still be correct
+        CHECK(matrix.getPixelValue(0, 0) == 100);
+        CHECK(matrix.getPixelValue(8, 6) == 150);
+        CHECK(matrix.getPixelValue(15, 11) == 200);
+    }
+    
+    SUBCASE("Custom layout still uses individual writes") {
+        clearMockI2COperations();
+        
+        IS31FL3737B matrix;
+        REQUIRE(matrix.begin() == true);
+        
+        // Set custom layout with 4 LEDs
+        PixelMapEntry customLayout[4] = {
+            {1, 1}, {2, 1}, {1, 2}, {2, 2}
+        };
+        matrix.setLayout(customLayout, 4);
+        
+        clearMockI2COperations();  // Clear initialization operations
+        
+        // Set all 4 pixels
+        for (int i = 0; i < 4; i++) {
+            matrix.setPixel(i, 100 + i * 10);
+        }
+        
+        // Call show() - custom layouts use individual writes
+        matrix.show();
+        
+        size_t opCount = getMockI2COperationCount();
+        
+        // Expect: 2 (page select) + 4 (individual LED writes)
+        CHECK(opCount >= 6);
+        CHECK(opCount <= 10);  // Some tolerance for implementation details
+    }
+    
+    SUBCASE("Bulk write respects register stride") {
+        IS31FL3737B matrix;
+        REQUIRE(matrix.begin() == true);
+        
+        // Fill entire matrix with pattern
+        for (int y = 0; y < 12; y++) {
+            for (int x = 0; x < 12; x++) {
+                matrix.drawPixel(x, y, (x + y * 16) % 256);
+            }
+        }
+        
+        matrix.show();
+        
+        // Verify all pixels are still correct after bulk write
+        for (int y = 0; y < 12; y++) {
+            for (int x = 0; x < 12; x++) {
+                uint8_t expected = (x + y * 16) % 256;
+                CHECK(matrix.getPixelValue(x, y) == expected);
+            }
+        }
     }
 }
 

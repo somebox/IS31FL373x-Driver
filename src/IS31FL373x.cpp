@@ -21,6 +21,30 @@ size_t getMockI2COperationCount() {
     return mockI2COperations.size();
 }
 
+bool mockI2CContainsWrite(uint8_t reg, uint8_t value) {
+    for (const auto& op : mockI2COperations) {
+        if (!op.isWrite) continue;
+        
+        // Check direct register write
+        if (op.reg == reg && op.value == value) {
+            return true;
+        }
+        
+        // Check bulk write data
+        if (!op.bulkData.empty()) {
+            // For bulk writes, op.reg is the starting register
+            // and bulkData contains the values
+            if (reg >= op.reg && reg < op.reg + op.bulkData.size()) {
+                size_t offset = reg - op.reg;
+                if (op.bulkData[offset] == value) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
 bool Adafruit_I2CDevice::write(uint8_t* buffer, size_t len) {
     if (buffer == nullptr || len == 0) return true;
     
@@ -30,6 +54,15 @@ bool Adafruit_I2CDevice::write(uint8_t* buffer, size_t len) {
     op.reg = buffer[0];
     op.value = (len >= 2) ? buffer[1] : 0;
     op.isWrite = true;
+    
+    // For bulk writes (>2 bytes), store all data
+    if (len > 2) {
+        op.bulkData.reserve(len - 1);
+        for (size_t i = 1; i < len; i++) {
+            op.bulkData.push_back(buffer[i]);
+        }
+    }
+    
     mockI2COperations.push_back(op);
     
     // Remember last addressed register for subsequent read tracing
@@ -134,6 +167,7 @@ void IS31FL373x_Device::show() {
     selectPage(IS31FL373X_PAGE_PWM);
     
     // When a custom layout is active, iterate layout entries instead of matrix scan
+    // Custom layouts still use individual writes since they may be sparse/non-contiguous
     if (_useCustomLayout && _customLayout != nullptr && _layoutSize > 0) {
         uint16_t maxIndex = (_layoutSize < getPWMBufferSize()) ? _layoutSize : getPWMBufferSize();
         for (uint16_t i = 0; i < maxIndex; i++) {
@@ -147,18 +181,48 @@ void IS31FL373x_Device::show() {
         return;
     }
     
-    // Default matrix scan using coordinate transformation
+    // Use bulk writes for default matrix layout
+    // Build hardware register buffer respecting the chip's register stride
     uint8_t width = getWidth();
     uint8_t height = getHeight();
+    uint8_t stride = getRegisterStride();
+    
+    // Calculate total register space needed (height * stride)
+    uint16_t hwBufferSize = height * stride;
+    
+#ifdef UNIT_TEST
+    uint8_t* hwBuffer = static_cast<uint8_t*>(std::malloc(hwBufferSize));
+    if (hwBuffer == nullptr) return;
+#else
+    // On real hardware, allocate on heap for large buffers
+    uint8_t* hwBuffer = new uint8_t[hwBufferSize];
+    if (hwBuffer == nullptr) return;
+#endif
+    
+    // Initialize to zero
+    memset(hwBuffer, 0, hwBufferSize);
+    
+    // Map logical buffer to hardware register layout
     for (uint8_t row = 0; row < height; row++) {
         for (uint8_t col = 0; col < width; col++) {
             uint16_t bufferIndex = row * width + col;
             uint16_t regAddress = coordToIndex(col, row);
-            if (bufferIndex < getPWMBufferSize()) {
-                writeRegister(static_cast<uint8_t>(regAddress), _pwmBuffer[bufferIndex]);
+            if (bufferIndex < getPWMBufferSize() && regAddress < hwBufferSize) {
+                hwBuffer[regAddress] = _pwmBuffer[bufferIndex];
             }
         }
     }
+    
+    // Write entire buffer using bulk I2C writes with auto-increment
+    bool success = writeBulk(0x00, hwBuffer, hwBufferSize);
+    
+#ifdef UNIT_TEST
+    std::free(hwBuffer);
+#else
+    delete[] hwBuffer;
+#endif
+    
+    (void)success;  // Suppress unused variable warning in non-debug builds
 }
 
 void IS31FL373x_Device::clear() {
@@ -240,6 +304,44 @@ bool IS31FL373x_Device::writeRegister(uint8_t reg, uint8_t value) {
     if (_i2c_dev == nullptr) return false;  // Not initialized yet
     uint8_t buffer[2] = {reg, value};
     return _i2c_dev->write(buffer, 2);
+}
+
+bool IS31FL373x_Device::writeBulk(uint8_t startReg, const uint8_t* data, size_t length) {
+    if (_i2c_dev == nullptr || data == nullptr || length == 0) return false;
+    
+    // I2C burst write: first byte is the starting register address,
+    // followed by the data bytes. The chip will auto-increment the register address.
+    // Maximum practical buffer size depends on I2C implementation, typically 128 bytes
+    const size_t MAX_CHUNK_SIZE = 64;  // Conservative chunk size for compatibility
+    
+    size_t offset = 0;
+    while (offset < length) {
+        size_t chunkSize = (length - offset > MAX_CHUNK_SIZE) ? MAX_CHUNK_SIZE : (length - offset);
+        
+#ifdef UNIT_TEST
+        // In unit tests, allocate on heap to avoid stack issues
+        uint8_t* buffer = static_cast<uint8_t*>(std::malloc(chunkSize + 1));
+        if (buffer == nullptr) return false;
+#else
+        // In real hardware, use VLA (variable length array) or allocate on heap
+        // For small chunks, stack allocation is fine
+        uint8_t buffer[MAX_CHUNK_SIZE + 1];
+#endif
+        
+        buffer[0] = startReg + offset;  // Starting register for this chunk
+        memcpy(&buffer[1], &data[offset], chunkSize);
+        
+        bool result = _i2c_dev->write(buffer, chunkSize + 1);
+        
+#ifdef UNIT_TEST
+        std::free(buffer);
+#endif
+        
+        if (!result) return false;
+        offset += chunkSize;
+    }
+    
+    return true;
 }
 
 bool IS31FL373x_Device::readRegister(uint8_t reg, uint8_t* value) {
