@@ -8,6 +8,7 @@ Arduino driver for Lumissil **IS31FL3733**, **IS31FL3737**, and **IS31FL3737B** 
 - **Multi-chip canvas** for large displays with seamless coordinate mapping  
 - **Adafruit_GFX compatible** for familiar graphics primitives
 - **Buffered operations** eliminate flickering with atomic updates
+- **Optimized bulk I2C writes** for fast frame rates (~95% reduction in I2C overhead)
 - **Custom layouts** for non-matrix arrangements (clocks, 7-segment displays)
 - **Hardware + software brightness control** for flexible dimming
 
@@ -117,6 +118,25 @@ void loop() {
 ```
 
 For vertical stacking, use `LAYOUT_VERTICAL` and set the canvas size to `(max(widths), sum(heights))`. See the API doc “Canvas Sizing and Routing” for sizing and routing rules.
+
+## Performance & Optimization
+
+The driver uses **I2C burst writes with auto-increment** to dramatically improve frame rates. Instead of sending individual register writes for each LED, the `show()` method:
+
+1. Builds a complete hardware register buffer in memory
+2. Writes the entire buffer using optimized 64-byte I2C chunks
+3. Reduces I2C overhead by ~95%
+
+**Performance Impact:**
+- **IS31FL3737B (12×12)**: 5-8 I2C operations instead of 146 individual writes
+- **IS31FL3733 (12×16)**: 5-8 I2C operations instead of 194 individual writes
+
+This optimization is particularly beneficial for:
+- High frame rate applications (animations, video displays)
+- Non-blocking environments (ESPHome, FreeRTOS)
+- Battery-powered devices (reduced I2C bus time = lower power)
+
+**Note:** Custom layouts use individual writes since LEDs may be sparse or non-contiguous.
 
 ## Coordinate System & Register Mapping
 

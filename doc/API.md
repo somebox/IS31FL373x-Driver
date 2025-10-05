@@ -36,9 +36,17 @@ void reset();                   // Software reset via register read
 ### Display Control
 
 ```cpp
-void show();                    // Push local buffer to hardware
+void show();                    // Push local buffer to hardware using optimized bulk I2C writes
 void clear();                   // Clear local buffer (set all pixels to 0)
 ```
+
+**Performance Note:** The `show()` method uses I2C burst writes with auto-increment to dramatically reduce I2C overhead:
+- **IS31FL3737B (12×12)**: ~5-8 I2C operations instead of 146 individual writes (~95% reduction)
+- **IS31FL3733 (12×16)**: ~5-8 I2C operations instead of 194 individual writes (~96% reduction)
+
+This optimization provides significantly faster frame rates and reduces blocking time in applications like ESPHome. Data is written in 64-byte chunks for maximum I2C compatibility.
+
+**Note:** Custom layouts continue to use individual register writes since they may be sparse or non-contiguous.
 
 ### Drawing (Adafruit_GFX Compatible)
 
