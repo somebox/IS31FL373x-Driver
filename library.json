@@ -1,6 +1,6 @@
 {
   "name": "IS31FL373x Driver",
-  "version": "1.0.10",
+  "version": "1.0.11",
   "description": "Unified Arduino driver for Lumissil IS31FL3733 (12x16) and IS31FL3737B (12x12) LED matrix controllers with multi-chip canvas support, custom layouts, and Adafruit_GFX integration.",
   "keywords": [
     "is31fl3733",

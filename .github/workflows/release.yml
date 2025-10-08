@@ -1,0 +1,58 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Semantic version (e.g. 1.1.0)"
+        required: true
+
+jobs:
+  prepare-release:
+    name: Prepare Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      - name: Install PlatformIO Core
+        run: pip install --upgrade platformio
+
+      - name: Update version files
+        run: python scripts/set_version.py "${{ github.event.inputs.version }}"
+
+      - name: Run unit tests
+        run: pio test -e native_test --verbose
+
+      - name: Build examples
+        run: |
+          cd examples/PlatformIO_Basic
+          pio run -e teensy41
+          pio run -e esp32
+
+      - name: Commit version bump
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git commit -am "chore: release ${{ github.event.inputs.version }}" || echo "No changes to commit"
+
+      - name: Create tag
+        run: |
+          git tag "v${{ github.event.inputs.version }}"
+          git push origin HEAD
+          git push origin "v${{ github.event.inputs.version }}"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "v${{ github.event.inputs.version }}"
+          name: "v${{ github.event.inputs.version }}"
+          generate_release_notes: true
+

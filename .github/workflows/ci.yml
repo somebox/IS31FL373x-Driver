@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  test:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install PlatformIO Core
+        run: pip install --upgrade platformio
+
+      - name: Run unit tests
+        run: pio test -e native_test --verbose
+
+  build:
+    name: Example Builds
+    runs-on: ubuntu-latest
+    needs: test
+    strategy:
+      matrix:
+        python-version: ["3.11"]
+        environment: ["teensy41", "esp32"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install PlatformIO Core
+        run: pip install --upgrade platformio
+
+      - name: Build ${{ matrix.environment }} example
+        working-directory: examples/PlatformIO_Basic
+        run: pio run -e ${{ matrix.environment }}
+
+  lint-metadata:
+    name: Validate Library Metadata
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      - name: Install PlatformIO Core
+        run: pip install --upgrade platformio
+
+      - name: Validate library structure
+        run: |
+          echo "Checking library.properties..."
+          if [ ! -f "library.properties" ]; then
+            echo "Error: library.properties not found"
+            exit 1
+          fi
+          echo "Checking library.json..."
+          if [ ! -f "library.json" ]; then
+            echo "Error: library.json not found"
+            exit 1
+          fi
+          pio pkg install -l file://.
+          echo "✅ Library structure is valid"
+
+
