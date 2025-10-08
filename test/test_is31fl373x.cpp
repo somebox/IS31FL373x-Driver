@@ -22,6 +22,7 @@
 #include "doctest.h"
 #include "IS31FL373x.h"
 #include <cstdio>
+#include <vector>
 
 #ifdef UNIT_TEST
 // Mock implementations for testing
@@ -365,6 +366,27 @@ TEST_CASE("Custom Layout Support") {
         CHECK(matrix.getWidth() == 12);
         CHECK(matrix.getHeight() == 12);
     }
+
+    SUBCASE("Reject layouts larger than PWM buffer") {
+        std::vector<PixelMapEntry> largeLayout(matrix.getPWMBufferSize() + 5, PixelMapEntry{1, 1});
+        matrix.setLayout(largeLayout.data(), static_cast<uint16_t>(largeLayout.size()));
+        CHECK(matrix.isCustomLayoutActive() == false);
+        CHECK(matrix.getLayoutSize() == 0);
+    }
+
+    SUBCASE("Reject layouts with out-of-range CS pins") {
+        PixelMapEntry invalidCs[] = { {13, 1} };  // CS13 invalid for 12x12 devices
+        matrix.setLayout(invalidCs, 1);
+        CHECK(matrix.isCustomLayoutActive() == false);
+        CHECK(matrix.getLayoutSize() == 0);
+    }
+
+    SUBCASE("Reject layouts with out-of-range SW pins") {
+        PixelMapEntry invalidSw[] = { {1, 13} };  // SW13 invalid (rows are 1-12)
+        matrix.setLayout(invalidSw, 1);
+        CHECK(matrix.isCustomLayoutActive() == false);
+        CHECK(matrix.getLayoutSize() == 0);
+    }
     
     SUBCASE("Indexed drawing with custom layout") {
         clearMockI2COperations();
@@ -394,6 +416,17 @@ TEST_CASE("Custom Layout Support") {
         
         // Remove trivial setPixel-by-index assertions
         CHECK(matrix.getPWMBufferSize() == 144);
+    }
+
+    SUBCASE("Custom layout skips entries that overflow after offsets") {
+        PixelMapEntry layout[1] = { {12, 1} };  // Valid without offset
+        matrix.setLayout(layout, 1);
+        matrix.setCoordinateOffset(4, 0);  // Shift CS by +4 -> invalid (greater than width)
+        clearMockI2COperations();
+        matrix.setPixel(0, 0x55);
+        matrix.show();
+        // Expect only the page select writes (unlock + command) and no PWM register writes
+        CHECK(getMockI2COperationCount() == 2);
     }
 }
 

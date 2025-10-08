@@ -204,6 +204,8 @@ protected:
     bool writeRegister(uint8_t reg, uint8_t value);
     bool writeBulk(uint8_t startReg, const uint8_t* data, size_t length);
     bool readRegister(uint8_t reg, uint8_t* value);
+    virtual bool isValidCsPin(uint8_t cs1Based) const;
+    bool isValidCsSw(uint8_t cs1Based, uint8_t sw1Based) const;
     
 public:
     // Coordinate conversion (public for testing)

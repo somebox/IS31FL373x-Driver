@@ -164,7 +164,9 @@ void IS31FL373x_Device::show() {
     if (_pwmBuffer == nullptr) return;
     
     // Switch to PWM page
-    selectPage(IS31FL373X_PAGE_PWM);
+    if (!selectPage(IS31FL373X_PAGE_PWM)) {
+        return;
+    }
     
     // When a custom layout is active, iterate layout entries instead of matrix scan
     // Custom layouts still use individual writes since they may be sparse/non-contiguous
@@ -173,10 +175,24 @@ void IS31FL373x_Device::show() {
         for (uint16_t i = 0; i < maxIndex; i++) {
             const PixelMapEntry& entry = _customLayout[i];
             // entry.cs and entry.sw are 1-based; apply offsets here
-            uint8_t cs = static_cast<uint8_t>(entry.cs + _csOffset);
-            uint8_t sw = static_cast<uint8_t>(entry.sw + _swOffset);
+            uint16_t csAdjusted = static_cast<uint16_t>(entry.cs) + _csOffset;
+            uint16_t swAdjusted = static_cast<uint16_t>(entry.sw) + _swOffset;
+
+            if (csAdjusted == 0 || csAdjusted > 255 || swAdjusted == 0 || swAdjusted > 255) {
+                continue;  // Ignore entries that overflow 8-bit register addresses
+            }
+
+            uint8_t cs = static_cast<uint8_t>(csAdjusted);
+            uint8_t sw = static_cast<uint8_t>(swAdjusted);
+
+            if (!isValidCsSw(cs, sw)) {
+                continue;  // Skip invalid physical mappings after offsets
+            }
+
             uint16_t regAddress = csSwToIndex(cs, sw);
-            writeRegister(static_cast<uint8_t>(regAddress), _pwmBuffer[i]);
+            if (regAddress != 0xFFFF) {
+                writeRegister(static_cast<uint8_t>(regAddress), _pwmBuffer[i]);
+            }
         }
         return;
     }
@@ -273,10 +289,32 @@ void IS31FL373x_Device::setPixel(uint16_t index, uint8_t pwm) {
 }
 
 void IS31FL373x_Device::setLayout(const PixelMapEntry* layout, uint16_t layoutSize) {
-    // TODO: Implement custom layout mapping
+    _customLayout = nullptr;
+    _layoutSize = 0;
+    _useCustomLayout = false;
+
+    if (layout == nullptr || layoutSize == 0) {
+        return;
+    }
+
+    // Guard against layouts larger than the PWM buffer
+    if (layoutSize > getPWMBufferSize()) {
+        return;
+    }
+
+    // Validate that all CS/SW pin mappings fall within the physical device limits
+    for (uint16_t i = 0; i < layoutSize; i++) {
+        uint8_t cs1Based = layout[i].cs;
+        uint8_t sw1Based = layout[i].sw;
+
+        if (!isValidCsSw(cs1Based, sw1Based)) {
+            return;  // Reject layout with out-of-range mapping
+        }
+    }
+
     _customLayout = const_cast<PixelMapEntry*>(layout);
     _layoutSize = layoutSize;
-    _useCustomLayout = (layout != nullptr && layoutSize > 0);
+    _useCustomLayout = true;
 }
 
 void IS31FL373x_Device::setCoordinateOffset(uint8_t csOffset, uint8_t swOffset) {
@@ -344,6 +382,19 @@ bool IS31FL373x_Device::writeBulk(uint8_t startReg, const uint8_t* data, size_t 
     return true;
 }
 
+bool IS31FL373x_Device::isValidCsPin(uint8_t cs1Based) const {
+    // Reference: doc/IS31FL373x-reference.md (matrix width per device)
+    return (cs1Based >= 1) && (cs1Based <= getWidth());
+}
+
+bool IS31FL373x_Device::isValidCsSw(uint8_t cs1Based, uint8_t sw1Based) const {
+    if (!isValidCsPin(cs1Based)) {
+        return false;
+    }
+    // Rows/SW pins are always 1..12 per reference doc
+    return (sw1Based >= 1) && (sw1Based <= getHeight());
+}
+
 bool IS31FL373x_Device::readRegister(uint8_t reg, uint8_t* value) {
     if (value == nullptr || _i2c_dev == nullptr) return false;
     
@@ -358,6 +409,9 @@ uint16_t IS31FL373x_Device::coordToIndex(uint8_t x, uint8_t y) const {
     // Apply coordinate offsets for hardware compatibility
     uint8_t cs = x + _csOffset + 1;  // Convert to 1-based CS (CSx)
     uint8_t sw = y + _swOffset + 1;  // Convert to 1-based SW (SWy)
+    if (!isValidCsSw(cs, sw)) {
+        return 0xFFFF;
+    }
     return csSwToIndex(cs, sw);
 }
 uint16_t IS31FL373x_Device::csSwToIndex(uint8_t cs1Based, uint8_t sw1Based) const {
