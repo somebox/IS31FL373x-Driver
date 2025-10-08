@@ -21,6 +21,30 @@ size_t getMockI2COperationCount() {
     return mockI2COperations.size();
 }
 
+bool mockI2CContainsWrite(uint8_t reg, uint8_t value) {
+    for (const auto& op : mockI2COperations) {
+        if (!op.isWrite) continue;
+        
+        // Check direct register write
+        if (op.reg == reg && op.value == value) {
+            return true;
+        }
+        
+        // Check bulk write data
+        if (!op.bulkData.empty()) {
+            // For bulk writes, op.reg is the starting register
+            // and bulkData contains the values
+            if (reg >= op.reg && reg < op.reg + op.bulkData.size()) {
+                size_t offset = reg - op.reg;
+                if (op.bulkData[offset] == value) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
 bool Adafruit_I2CDevice::write(uint8_t* buffer, size_t len) {
     if (buffer == nullptr || len == 0) return true;
     
@@ -30,6 +54,15 @@ bool Adafruit_I2CDevice::write(uint8_t* buffer, size_t len) {
     op.reg = buffer[0];
     op.value = (len >= 2) ? buffer[1] : 0;
     op.isWrite = true;
+    
+    // For bulk writes (>2 bytes), store all data
+    if (len > 2) {
+        op.bulkData.reserve(len - 1);
+        for (size_t i = 1; i < len; i++) {
+            op.bulkData.push_back(buffer[i]);
+        }
+    }
+    
     mockI2COperations.push_back(op);
     
     // Remember last addressed register for subsequent read tracing
@@ -131,34 +164,81 @@ void IS31FL373x_Device::show() {
     if (_pwmBuffer == nullptr) return;
     
     // Switch to PWM page
-    selectPage(IS31FL373X_PAGE_PWM);
+    if (!selectPage(IS31FL373X_PAGE_PWM)) {
+        return;
+    }
     
     // When a custom layout is active, iterate layout entries instead of matrix scan
+    // Custom layouts still use individual writes since they may be sparse/non-contiguous
     if (_useCustomLayout && _customLayout != nullptr && _layoutSize > 0) {
         uint16_t maxIndex = (_layoutSize < getPWMBufferSize()) ? _layoutSize : getPWMBufferSize();
         for (uint16_t i = 0; i < maxIndex; i++) {
             const PixelMapEntry& entry = _customLayout[i];
             // entry.cs and entry.sw are 1-based; apply offsets here
-            uint8_t cs = static_cast<uint8_t>(entry.cs + _csOffset);
-            uint8_t sw = static_cast<uint8_t>(entry.sw + _swOffset);
+            uint16_t csAdjusted = static_cast<uint16_t>(entry.cs) + _csOffset;
+            uint16_t swAdjusted = static_cast<uint16_t>(entry.sw) + _swOffset;
+
+            if (csAdjusted == 0 || csAdjusted > 255 || swAdjusted == 0 || swAdjusted > 255) {
+                continue;  // Ignore entries that overflow 8-bit register addresses
+            }
+
+            uint8_t cs = static_cast<uint8_t>(csAdjusted);
+            uint8_t sw = static_cast<uint8_t>(swAdjusted);
+
+            if (!isValidCsSw(cs, sw)) {
+                continue;  // Skip invalid physical mappings after offsets
+            }
+
             uint16_t regAddress = csSwToIndex(cs, sw);
-            writeRegister(static_cast<uint8_t>(regAddress), _pwmBuffer[i]);
+            if (regAddress != 0xFFFF) {
+                writeRegister(static_cast<uint8_t>(regAddress), _pwmBuffer[i]);
+            }
         }
         return;
     }
     
-    // Default matrix scan using coordinate transformation
+    // Use bulk writes for default matrix layout
+    // Build hardware register buffer respecting the chip's register stride
     uint8_t width = getWidth();
     uint8_t height = getHeight();
+    uint8_t stride = getRegisterStride();
+    
+    // Calculate total register space needed (height * stride)
+    uint16_t hwBufferSize = height * stride;
+    
+#ifdef UNIT_TEST
+    uint8_t* hwBuffer = static_cast<uint8_t*>(std::malloc(hwBufferSize));
+    if (hwBuffer == nullptr) return;
+#else
+    // On real hardware, allocate on heap for large buffers
+    uint8_t* hwBuffer = new uint8_t[hwBufferSize];
+    if (hwBuffer == nullptr) return;
+#endif
+    
+    // Initialize to zero
+    memset(hwBuffer, 0, hwBufferSize);
+    
+    // Map logical buffer to hardware register layout
     for (uint8_t row = 0; row < height; row++) {
         for (uint8_t col = 0; col < width; col++) {
             uint16_t bufferIndex = row * width + col;
             uint16_t regAddress = coordToIndex(col, row);
-            if (bufferIndex < getPWMBufferSize()) {
-                writeRegister(static_cast<uint8_t>(regAddress), _pwmBuffer[bufferIndex]);
+            if (bufferIndex < getPWMBufferSize() && regAddress < hwBufferSize) {
+                hwBuffer[regAddress] = _pwmBuffer[bufferIndex];
             }
         }
     }
+    
+    // Write entire buffer using bulk I2C writes with auto-increment
+    bool success = writeBulk(0x00, hwBuffer, hwBufferSize);
+    
+#ifdef UNIT_TEST
+    std::free(hwBuffer);
+#else
+    delete[] hwBuffer;
+#endif
+    
+    (void)success;  // Suppress unused variable warning in non-debug builds
 }
 
 void IS31FL373x_Device::clear() {
@@ -209,10 +289,32 @@ void IS31FL373x_Device::setPixel(uint16_t index, uint8_t pwm) {
 }
 
 void IS31FL373x_Device::setLayout(const PixelMapEntry* layout, uint16_t layoutSize) {
-    // TODO: Implement custom layout mapping
+    _customLayout = nullptr;
+    _layoutSize = 0;
+    _useCustomLayout = false;
+
+    if (layout == nullptr || layoutSize == 0) {
+        return;
+    }
+
+    // Guard against layouts larger than the PWM buffer
+    if (layoutSize > getPWMBufferSize()) {
+        return;
+    }
+
+    // Validate that all CS/SW pin mappings fall within the physical device limits
+    for (uint16_t i = 0; i < layoutSize; i++) {
+        uint8_t cs1Based = layout[i].cs;
+        uint8_t sw1Based = layout[i].sw;
+
+        if (!isValidCsSw(cs1Based, sw1Based)) {
+            return;  // Reject layout with out-of-range mapping
+        }
+    }
+
     _customLayout = const_cast<PixelMapEntry*>(layout);
     _layoutSize = layoutSize;
-    _useCustomLayout = (layout != nullptr && layoutSize > 0);
+    _useCustomLayout = true;
 }
 
 void IS31FL373x_Device::setCoordinateOffset(uint8_t csOffset, uint8_t swOffset) {
@@ -242,6 +344,57 @@ bool IS31FL373x_Device::writeRegister(uint8_t reg, uint8_t value) {
     return _i2c_dev->write(buffer, 2);
 }
 
+bool IS31FL373x_Device::writeBulk(uint8_t startReg, const uint8_t* data, size_t length) {
+    if (_i2c_dev == nullptr || data == nullptr || length == 0) return false;
+    
+    // I2C burst write: first byte is the starting register address,
+    // followed by the data bytes. The chip will auto-increment the register address.
+    // Maximum practical buffer size depends on I2C implementation, typically 128 bytes
+    const size_t MAX_CHUNK_SIZE = 64;  // Conservative chunk size for compatibility
+    
+    size_t offset = 0;
+    while (offset < length) {
+        size_t chunkSize = (length - offset > MAX_CHUNK_SIZE) ? MAX_CHUNK_SIZE : (length - offset);
+        
+#ifdef UNIT_TEST
+        // In unit tests, allocate on heap to avoid stack issues
+        uint8_t* buffer = static_cast<uint8_t*>(std::malloc(chunkSize + 1));
+        if (buffer == nullptr) return false;
+#else
+        // In real hardware, use VLA (variable length array) or allocate on heap
+        // For small chunks, stack allocation is fine
+        uint8_t buffer[MAX_CHUNK_SIZE + 1];
+#endif
+        
+        buffer[0] = startReg + offset;  // Starting register for this chunk
+        memcpy(&buffer[1], &data[offset], chunkSize);
+        
+        bool result = _i2c_dev->write(buffer, chunkSize + 1);
+        
+#ifdef UNIT_TEST
+        std::free(buffer);
+#endif
+        
+        if (!result) return false;
+        offset += chunkSize;
+    }
+    
+    return true;
+}
+
+bool IS31FL373x_Device::isValidCsPin(uint8_t cs1Based) const {
+    // Reference: doc/IS31FL373x-reference.md (matrix width per device)
+    return (cs1Based >= 1) && (cs1Based <= getWidth());
+}
+
+bool IS31FL373x_Device::isValidCsSw(uint8_t cs1Based, uint8_t sw1Based) const {
+    if (!isValidCsPin(cs1Based)) {
+        return false;
+    }
+    // Rows/SW pins are always 1..12 per reference doc
+    return (sw1Based >= 1) && (sw1Based <= getHeight());
+}
+
 bool IS31FL373x_Device::readRegister(uint8_t reg, uint8_t* value) {
     if (value == nullptr || _i2c_dev == nullptr) return false;
     
@@ -256,6 +409,9 @@ uint16_t IS31FL373x_Device::coordToIndex(uint8_t x, uint8_t y) const {
     // Apply coordinate offsets for hardware compatibility
     uint8_t cs = x + _csOffset + 1;  // Convert to 1-based CS (CSx)
     uint8_t sw = y + _swOffset + 1;  // Convert to 1-based SW (SWy)
+    if (!isValidCsSw(cs, sw)) {
+        return 0xFFFF;
+    }
     return csSwToIndex(cs, sw);
 }
 uint16_t IS31FL373x_Device::csSwToIndex(uint8_t cs1Based, uint8_t sw1Based) const {
